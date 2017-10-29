@@ -1,0 +1,15 @@
+;--------------------------------------------------------------------
+;   Copyright (c) 2017  Vincent Semeria
+;--------------------------------------------------------------------
+
+EXPORTS
+    new_watch
+    set_watch_value
+    rename_watch
+    print_watches
+    expand_watch
+    collapse_watch
+    clear_watches
+    clear_watch
+	evaluate_tooltip
+    DebugExtensionInitialize
