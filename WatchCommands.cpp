@@ -49,20 +49,22 @@ rename_watch(PDEBUG_CLIENT4 Client, PCSTR args)
 }
 
 HRESULT CALLBACK
-clear_watch(PDEBUG_CLIENT Client, PCSTR args)
+clear_watch(PDEBUG_CLIENT4 Client, PCSTR args)
 {
-	UNREFERENCED_PARAMETER(Client);
+	if (InitDebuggerGlobals(Client) != S_OK) return E_FAIL;
 
 	unsigned int watchIndex = -1;
 	int r = sscanf(args, "%d", &watchIndex);
 	if (r <= 0 || watchIndex < 0 || watchIndex >= gWatches.size())
 	{
 		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "Unknown watch to remove: %d\n", watchIndex);
-		return S_FALSE;
 	}
-
-	delete gWatches[watchIndex];
-	gWatches.erase(gWatches.begin() + watchIndex);
+	else
+	{
+		delete gWatches[watchIndex];
+		gWatches.erase(gWatches.begin() + watchIndex);
+	}
+	DestroyDebuggerGlobals();
 	return S_OK;
 }
 

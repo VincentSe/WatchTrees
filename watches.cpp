@@ -148,6 +148,8 @@ ULONG WDBGAPI fieldCallBack(FIELD_INFO* pField, PVOID UserContext)
 	// The symbol of the type of pField is not directly here in pField. We can have it by 
 	// SymGetTypeInfo(pField->TypeId, TI_GET_TYPE).
 
+	// This method is not called back for fields coming from virtual derivations.
+
 	FieldContext* context = (FieldContext*)UserContext;
 
 	if (context->inTypeId == pField->TypeId)
@@ -542,15 +544,8 @@ void TypedValueTree::CopyTypeInfo(const TypedValueTree& other)
 ULONG64 expand_string(const TypedValueTree* w)
 {
 	// Return the address of the underlying char*. Only works when the union _Bx is interpreted as such a char* (strings longer than 4 characters ?).
-
-	int bxIndex = -1;
-	for (int i = 0; i < w->fieldCount; i++)
-		if (strncmp(w->fields[i].fName, "_Bx", 3) == 0)
-		{
-			bxIndex = i;
-			break;
-		}
-	if (bxIndex == -1)
+	const LightField& bx = w->FindField("_Bx");
+	if (!bx.TypeId)
 	{
 		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "_Bx not found\n");
 		return E_FAIL;
@@ -559,7 +554,7 @@ ULONG64 expand_string(const TypedValueTree* w)
 	ULONG64 cAddr = 0;
 	ULONG cb;
 	const int ptrSize = sizeof(long*);
-	ReadMemory(w->address + w->fields[bxIndex].address, /*out*/&cAddr, ptrSize, &cb);
+	ReadMemory(w->GetAddressOfData() + bx.address, /*out*/&cAddr, ptrSize, &cb);
 	return cAddr;
 }
 
@@ -1089,10 +1084,29 @@ LightField TypedValueTree::FindField(const char* fieldName) const
 	return it == this->fields.end() ? LightField() : *it;
 }
 
-HRESULT expand_vector(/*out*/TypedValueTree* w, bool STL)
+TypedValueTree FindVectorFirst(const TypedValueTree& vec)
 {
-	const LightField& myFirst = w->FindField(STL ? "_M_start" : "_Myfirst");
-	if (!myFirst.TypeId)
+	TypedValueTree v;
+	const LightField& myPair = vec.FindField("_Mypair");
+	if (myPair.TypeId)
+	{
+		v = TypedValueTree::FromField(myPair, vec.GetAddressOfData());
+		v.GetFields();
+		const LightField& myVal2 = v.FindField("_Myval2");
+		v = TypedValueTree::FromField(myVal2, v.GetAddressOfData());
+		v.GetFields();
+		v = TypedValueTree::FromField(v.FindField("_Myfirst"), v.GetAddressOfData());;
+	}
+	else
+		v = TypedValueTree::FromField(vec.FindField("_Myfirst"), vec.GetAddressOfData());
+
+	return v;
+}
+
+HRESULT expand_vector(/*out*/TypedValueTree& w)
+{
+	const TypedValueTree& myFirst = FindVectorFirst(w);
+	if (!myFirst.typeId)
 	{
 		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "get field _Myfirst failed\n");
 		return E_FAIL;
@@ -1102,9 +1116,9 @@ HRESULT expand_vector(/*out*/TypedValueTree* w, bool STL)
 	g_ExtSystem->GetCurrentProcessHandle(/*out*/&hProcess);
 	BOOL b;
 	DWORD type = 0, baseType = 0;
-	b = SymGetTypeInfo((HANDLE)hProcess, w->module, myFirst.TypeId, TI_GET_TYPE, &type); // SymTagData -> SymTagPointerType
-	if (!b || !SymGetTypeInfo((HANDLE)hProcess, w->module, type, TI_GET_TYPE, &baseType) // SymTagPointerType -> pointed type
-		|| myFirst.TypeId == type || baseType == type)
+	b = SymGetTypeInfo((HANDLE)hProcess, w.module, myFirst.typeId, TI_GET_TYPE, &type); // SymTagData -> SymTagPointerType
+	if (!b || !SymGetTypeInfo((HANDLE)hProcess, w.module, type, TI_GET_TYPE, &baseType) // SymTagPointerType -> pointed type
+		|| myFirst.typeId == type || baseType == type)
 	{
 		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "Cannot get pointed type\n");
 		return E_FAIL;
@@ -1112,24 +1126,23 @@ HRESULT expand_vector(/*out*/TypedValueTree* w, bool STL)
 
 	ULONG cb;
 	char pointType[1024];
-	g_ExtSymbols->GetTypeName(w->module, baseType, /*out*/pointType, 1024, &cb);
+	g_ExtSymbols->GetTypeName(w.module, baseType, /*out*/pointType, 1024, &cb);
 
 	// Read first and last element pointers
-	ULONG64 first=0, last=0;
 	const int ptrSize = sizeof(long*);
-	const ULONG64 baseAddr = w->GetAddressOfData();
-	if (!ReadMemory(baseAddr + myFirst.address, &first, ptrSize, &cb)
-		|| !ReadMemory(baseAddr + myFirst.address + ptrSize, &last, ptrSize, &cb))
+	ULONG64 first = myFirst.GetAddressOfData();
+	ULONG64 last = 0;
+	if (!ReadMemory(myFirst.address + ptrSize, &last, ptrSize, &cb))
 	{
 		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "Couldn't read first and last elements.\n");
 		return E_FAIL;
 	}
 
 	ULONG64 elemSize = 0;
-	SymGetTypeInfo((HANDLE)hProcess, w->module, baseType, TI_GET_LENGTH, &elemSize);
+	SymGetTypeInfo((HANDLE)hProcess, w.module, baseType, TI_GET_LENGTH, &elemSize);
 
 	DWORD pointedTypeTag = 0;
-	SymGetTypeInfo((HANDLE)hProcess, w->module, baseType, TI_GET_SYMTAG, &pointedTypeTag);
+	SymGetTypeInfo((HANDLE)hProcess, w.module, baseType, TI_GET_SYMTAG, &pointedTypeTag);
 	if ( (last-first) % elemSize )
 	{
 		//g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "padding detected %d %d\n", first, last);
@@ -1146,7 +1159,7 @@ HRESULT expand_vector(/*out*/TypedValueTree* w, bool STL)
 	TypedValueTree itemTemplate;
 	itemTemplate.type = pointType;
 	itemTemplate.typeId = baseType;
-	itemTemplate.module = w->module;
+	itemTemplate.module = w.module;
 	itemTemplate.GetFields(); // slow, only do it for the template
 	itemTemplate.starCount = 0;
 	switch (pointedTypeTag)
@@ -1165,7 +1178,7 @@ HRESULT expand_vector(/*out*/TypedValueTree* w, bool STL)
 
 	unsigned int nbIter = 0;
 	TypedValueTree* sub;
-	TypedValueTree* child = w->firstChild;
+	TypedValueTree* child = w.firstChild;
 	while (first<last && nbIter<200)
 	{
 		// add subwatches
@@ -1178,7 +1191,7 @@ HRESULT expand_vector(/*out*/TypedValueTree* w, bool STL)
 		{
 			sub = new TypedValueTree();
 			sub->offset = nbIter;
-			insert_subwatch(sub, w);
+			insert_subwatch(sub, &w);
 		}
 
 		sub->fieldName = "[" + std::to_string(nbIter) + "]";
@@ -1190,7 +1203,7 @@ HRESULT expand_vector(/*out*/TypedValueTree* w, bool STL)
 	}
 
 	if (child)
-		w->Prune(child);
+		w.Prune(child);
 	
 	return S_OK;
 }
@@ -1437,11 +1450,11 @@ void TypedValueTree::Expand()
 	}
 	else if (this->type.compare(0, 12, "std::vector<") == 0)
 	{
-		expand_vector(this, false);
+		expand_vector(*this);
 	}
 	else if (this->type.compare(0, 18, "stlpd_std::vector<") == 0)
 	{
-		expand_vector(this, true);
+		expand_vector(*this);
 	}
 	else if (strncmp(this->fieldName.c_str(), "_Myfirst", 8) == 0) // subclasses of std::vector
 	{
@@ -1449,7 +1462,7 @@ void TypedValueTree::Expand()
 		this->address = this->parent->address;
 		this->fields = this->parent->fields;
 		this->fieldCount = this->fields.size();
-		expand_vector(this, false);
+		expand_vector(*this);
 		this->fields.clear();
 		this->fieldCount = 0;
 	}

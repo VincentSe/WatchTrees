@@ -5,3 +5,7 @@ WatchTrees.VC.db
 x64
 sopManaged.h
 *#
+*.opendb
+*.opensdf
+*.sdf
+*.suo
