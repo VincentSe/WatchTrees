@@ -10,6 +10,7 @@ Copyright (c) 2017  Vincent Semeria
 #include <dbgeng.h>
 #include <string>
 #include <vector>
+#include <memory>
 
 struct LightField
 {
@@ -42,13 +43,15 @@ public:
 	void Print(long indent, std::vector<WatchLine>& output); // updates addresses during the print
 	void CopyTypeInfo(const TypedValueTree& other);
 
-	void GetFields(); // Get symbols SymTagData
+	// TODO merge those 2 methods
+	void FillFields(); // Get symbols SymTagData
+	void FillFieldsAndChildren(); // Transform std containers, adding children watches instead of native fields
+
 	HRESULT GetField(unsigned long fieldOffset, /*out*/LightField& fieldDesc) const; // Convert a SymTagData to a type symbol
 	LightField FindField(const char* fieldName) const;
 	static TypedValueTree FromField(const LightField& field, ULONG64 addr);
 	ULONG64 GetAddressOfData() const; // dereference this->address for pointer types
 
-	void Expand();
 	char GetExpandCharacter() const; // the + or - to click
 
 	// Whether this watch should print its C++ fields, or some other representation (like vectors or maps)
@@ -99,6 +102,6 @@ struct Watch
 };
 
 // Don't use vector<Watch>, there are pointers in Watch that we don't want to manage when the vector is resized.
-extern std::vector<Watch*> gWatches; 
+extern std::vector<std::unique_ptr<Watch>> gWatches; 
 
 

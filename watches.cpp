@@ -20,7 +20,7 @@ Copyright (c) 2017  Vincent Semeria
 #include <sstream>
 #include <algorithm>
 
-std::vector<Watch*> gWatches;
+std::vector<std::unique_ptr<Watch>> gWatches;
 
 TypedValueTree::~TypedValueTree()
 {
@@ -482,7 +482,7 @@ HRESULT print_managed_value(ULONG64 addr, const char* type)
 	return E_FAIL;
 }
 
-void TypedValueTree::GetFields()
+void TypedValueTree::FillFields()
 {
 	this->fields.clear();
 
@@ -918,7 +918,7 @@ HRESULT Watch::evaluate()
 		g_ExtSymbols->GetTypeName(valTree.module, (ULONG)valTree.typeId, /*out*/type, 2048, &cb);
 		valTree.type = type;
 
-		valTree.GetFields();
+		valTree.FillFields();
 
 		if (valTree.fArray && !valTree.fPointer)
 		{
@@ -1024,7 +1024,7 @@ HRESULT expand_array(/*out*/TypedValueTree* w)
 		sub->type = pointType;
 		sub->module = w->module;
 		sub->address = w->address + nbIter*w->TypeSize;
-		sub->GetFields();
+		sub->FillFields();
 		sub->offset = nbIter;
 		sub->starCount = 0; //starCount;
 		sub->dereferences = 0;
@@ -1045,7 +1045,7 @@ HRESULT expand_iterator(/*out*/TypedValueTree* w, bool myVal)
 		return E_FAIL;
 	}
 
-	ptr.GetFields();
+	ptr.FillFields();
 	const LightField& myValField = ptr.FindField("_Myval"); 
 	if (!myValField.TypeId)
 	{
@@ -1067,7 +1067,7 @@ HRESULT expand_iterator(/*out*/TypedValueTree* w, bool myVal)
 
 	sub->fieldName = myVal ? "_Myval" : "_Ptr";
 	sub->type = iterType;
-	sub->GetFields();
+	sub->FillFields();
 	sub->offset = 0;
 	sub->starCount = myVal ? 0 : 1;
 	sub->dereferences = 0;
@@ -1077,7 +1077,7 @@ HRESULT expand_iterator(/*out*/TypedValueTree* w, bool myVal)
 
 LightField TypedValueTree::FindField(const char* fieldName) const
 {
-	const int fieldLen = strlen(fieldName);
+	const size_t fieldLen = strlen(fieldName);
 	std::vector<LightField>::const_iterator it =
 		std::find_if(this->fields.begin(), this->fields.end(), [&](const LightField& f)
 			{ return strncmp(f.fName, fieldName, fieldLen) == 0; });
@@ -1091,10 +1091,10 @@ TypedValueTree FindVectorFirst(const TypedValueTree& vec)
 	if (myPair.TypeId)
 	{
 		v = TypedValueTree::FromField(myPair, vec.GetAddressOfData());
-		v.GetFields();
+		v.FillFields();
 		const LightField& myVal2 = v.FindField("_Myval2");
 		v = TypedValueTree::FromField(myVal2, v.GetAddressOfData());
-		v.GetFields();
+		v.FillFields();
 		v = TypedValueTree::FromField(v.FindField("_Myfirst"), v.GetAddressOfData());;
 	}
 	else
@@ -1160,7 +1160,7 @@ HRESULT expand_vector(/*out*/TypedValueTree& w)
 	itemTemplate.type = pointType;
 	itemTemplate.typeId = baseType;
 	itemTemplate.module = w.module;
-	itemTemplate.GetFields(); // slow, only do it for the template
+	itemTemplate.FillFields(); // slow, only do it for the template
 	itemTemplate.starCount = 0;
 	switch (pointedTypeTag)
 	{
@@ -1220,9 +1220,32 @@ TypedValueTree TypedValueTree::FromField(const LightField& field, ULONG64 addr)
 	return t;
 }
 
-HRESULT expand_map(/*out*/TypedValueTree* w, bool myHead)
+TypedValueTree FindMapHead(const TypedValueTree& map)
 {
-	TypedValueTree& myHeadWatch = myHead ? *w : TypedValueTree::FromField(w->FindField("_Myhead"), w->GetAddressOfData());
+	TypedValueTree v;
+	LightField f;
+	const LightField& myPair = map.FindField("_Mypair");
+	if (myPair.TypeId)
+	{
+		v = TypedValueTree::FromField(myPair, map.GetAddressOfData());
+		v.FillFields();
+		f = v.FindField("_Myval2");
+		v = TypedValueTree::FromField(f, v.GetAddressOfData());
+		v.FillFields();
+		f = v.FindField("_Myval2");
+		v = TypedValueTree::FromField(f, v.GetAddressOfData());
+		v.FillFields();
+		v = TypedValueTree::FromField(v.FindField("_Myhead"), v.GetAddressOfData());;
+	}
+	else
+		v = TypedValueTree::FromField(map.FindField("_Myhead"), map.GetAddressOfData());
+
+	return v;
+}
+
+HRESULT expand_map(/*out*/TypedValueTree& w, bool myHead)
+{
+	TypedValueTree& myHeadWatch = myHead ? w : FindMapHead(w); // copy-construction after FindMapHead :(
 
 	if (!myHeadWatch.typeId)
 	{
@@ -1231,7 +1254,7 @@ HRESULT expand_map(/*out*/TypedValueTree* w, bool myHead)
 	}
 
 	if (myHeadWatch.fields.empty())
-		myHeadWatch.GetFields();
+		myHeadWatch.FillFields();
 
 	ULONG cb;
 	ULONG64 myHeadAddress = 0;
@@ -1264,12 +1287,12 @@ HRESULT expand_map(/*out*/TypedValueTree* w, bool myHead)
 	pairTemplate.type = pairName;
 	pairTemplate.starCount = 0; // it's the pair itself, not a pointer to it
 	pairTemplate.fStruct = true;
-	pairTemplate.GetFields();
+	pairTemplate.FillFields();
 
 	char iterState = 'd'; // down
 	unsigned int nbIter = 0, nbIterGuard = 0;
 	ULONG64 leftNode, rightNode, parentNode;
-	TypedValueTree* child = w->firstChild;
+	TypedValueTree* child = w.firstChild;
 	TypedValueTree* sub;
 	while (nbIterGuard < 200)
 	{
@@ -1288,7 +1311,7 @@ HRESULT expand_map(/*out*/TypedValueTree* w, bool myHead)
 				{
 					sub = new TypedValueTree();
 					sub->offset = nbIter;
-					insert_subwatch(sub, w);
+					insert_subwatch(sub, &w);
 				}
 				sub->fieldName = "[" + std::to_string(nbIter) + "]";
 				sub->address = mapNode + pairOffset;
@@ -1309,7 +1332,7 @@ HRESULT expand_map(/*out*/TypedValueTree* w, bool myHead)
 					{
 						sub = new TypedValueTree();
 						sub->offset = nbIter;
-						insert_subwatch(sub, w);
+						insert_subwatch(sub, &w);
 					}
 					sub->fieldName = "[" + std::to_string(nbIter) + "]";
 					sub->address = rightNode + pairOffset;
@@ -1347,7 +1370,7 @@ HRESULT expand_map(/*out*/TypedValueTree* w, bool myHead)
 				{
 					sub = new TypedValueTree();
 					sub->offset = nbIter;
-					insert_subwatch(sub, w);
+					insert_subwatch(sub, &w);
 				}
 				sub->fieldName = "[" + std::to_string(nbIter) + "]";
 				sub->address = mapNode + pairOffset;
@@ -1371,7 +1394,7 @@ HRESULT expand_map(/*out*/TypedValueTree* w, bool myHead)
 	}
 
 	if (child)
-		w->Prune(child);
+		w.Prune(child);
 	
 	return S_OK;
 }
@@ -1394,7 +1417,7 @@ HRESULT expand_list(/*out*/TypedValueTree* w, bool myHead)
 	}
 
 	if (myHeadWatch.fields.empty())
-		myHeadWatch.GetFields();
+		myHeadWatch.FillFields();
 
 	w->Prune();
 
@@ -1423,7 +1446,7 @@ HRESULT expand_list(/*out*/TypedValueTree* w, bool myHead)
 		sub->type = pairName;
 		sub->module = myVal.module;
 		sub->address = addr + pairOffset;
-		sub->GetFields();
+		sub->FillFields();
 		sub->offset = nbIter;
 		sub->starCount = 0; // it's the pair itself, not a pointer to it
 		sub->dereferences = 0;
@@ -1434,10 +1457,10 @@ HRESULT expand_list(/*out*/TypedValueTree* w, bool myHead)
 	return S_OK;
 }
 
-void TypedValueTree::Expand()
+void TypedValueTree::FillFieldsAndChildren()
 {
 	if (!this->expanded && this->fields.empty()) // TODO : when recompute subwatches ? for std containers, stepping can change the number of children
-		this->GetFields();
+		this->FillFields();
 
 	this->expanded = true;
 
@@ -1473,7 +1496,7 @@ void TypedValueTree::Expand()
 	else if (this->type.compare(0, 9, "std::map<") == 0
 			|| this->type.compare(0, 9, "std::set<") == 0)
 	{
-		expand_map(this, false);
+		expand_map(*this, false);
 	}
 	else if (strncmp(this->fieldName.c_str(), "_Myhead", 7) == 0)
 	{
@@ -1481,7 +1504,7 @@ void TypedValueTree::Expand()
 		if (this->type.compare(0, 10, "std::_List") == 0)
 			expand_list(this, true);
 		else
-			expand_map(this, true);
+			expand_map(*this, true);
 		
 		this->fieldName = "_Myhead";
 	}
@@ -1534,7 +1557,7 @@ void TypedValueTree::Expand()
 		const int ptrSize = sizeof(long*);
 		ReadMemory(this->address, &sub->address, ptrSize, &cb);
 
-		sub->GetFields(); // same fields as the parent, could use them instead
+		sub->FillFields(); // same fields as the parent, could use them instead
 	}
 }
 

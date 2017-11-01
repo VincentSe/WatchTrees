@@ -18,7 +18,7 @@ new_watch(PDEBUG_CLIENT4 Client, PCSTR args)
 	Watch* w = new Watch();
 	w->valTree.offset = (unsigned long)gWatches.size();
 	w->expr = args;
-	gWatches.push_back(w);
+	gWatches.emplace_back(w);
 	return S_OK;
 }
 
@@ -37,12 +37,12 @@ rename_watch(PDEBUG_CLIENT4 Client, PCSTR args)
 		return E_FAIL;
 	}
 
-	Watch* w = gWatches[offset];
-	w->valTree.Prune();
-	w->valTree.typeId = 0;
-	w->valTree.address = 0;
-	w->valTree.dynamicDereference = 0;
-	w->expr = watchName;
+	Watch& w = *gWatches[offset];
+	w.valTree.Prune();
+	w.valTree.typeId = 0;
+	w.valTree.address = 0;
+	w.valTree.dynamicDereference = 0;
+	w.expr = watchName;
 
 	DestroyDebuggerGlobals();
 	return S_OK;
@@ -61,7 +61,6 @@ clear_watch(PDEBUG_CLIENT4 Client, PCSTR args)
 	}
 	else
 	{
-		delete gWatches[watchIndex];
 		gWatches.erase(gWatches.begin() + watchIndex);
 	}
 	DestroyDebuggerGlobals();
@@ -73,8 +72,6 @@ clear_watches(PDEBUG_CLIENT Client, PCSTR args)
 {
 	UNREFERENCED_PARAMETER(Client);
 	UNREFERENCED_PARAMETER(args);
-	for (Watch* w : gWatches)
-		delete w;
 	gWatches.clear();
 	return S_OK;
 }
@@ -138,7 +135,7 @@ expand_watch(PDEBUG_CLIENT4 Client, PCSTR args)
 		}
 	}
 
-	w->Expand();
+	w->FillFieldsAndChildren();
 
 expand_watch_finish:
 	DestroyDebuggerGlobals();
@@ -193,7 +190,7 @@ print_watches(PDEBUG_CLIENT4 Client, PCSTR args)
 	watchLines[0].name = "  Name";
 	watchLines[0].value = "Value";
 	watchLines[0].type = "Type";
-	for (Watch* w : gWatches)
+	for (std::unique_ptr<Watch>& w : gWatches)
 	{
 		HRESULT eval = S_OK;
 		if (reeval)
@@ -372,7 +369,7 @@ set_watch_value(PDEBUG_CLIENT4 Client, PCSTR args)
 	// 	g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "Watch set value failed\n");
 
 	char cmd[256];
-	sprintf_s(cmd, 256, "?? *(%s*)0x%p =", typeName, Address);
+	sprintf_s(/*out*/cmd, 256, "?? *(%s*)0x%p =", typeName, Address);
 	strcat_s(cmd, 256, pch);
 	g_ExtControl->Execute(DEBUG_OUTCTL_IGNORE, // print the resulting watch instead
 		cmd,
