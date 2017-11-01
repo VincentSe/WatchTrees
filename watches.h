@@ -49,7 +49,7 @@ public:
 
 	HRESULT GetField(unsigned long fieldOffset, /*out*/LightField& fieldDesc) const; // Convert a SymTagData to a type symbol
 	LightField FindField(const char* fieldName) const;
-	static TypedValueTree FromField(const LightField& field, ULONG64 addr);
+	void FromField(const LightField& field, ULONG64 addr);
 	ULONG64 GetAddressOfData() const; // dereference this->address for pointer types
 
 	char GetExpandCharacter() const; // the + or - to click
@@ -65,8 +65,8 @@ public:
 	unsigned __int64 module {}; // address in the debugee's memory where the module is loaded
 	ULONG typeId {};
 	std::string type; // can be long types like complex maps
-	bool fPointer{}, fStruct{}, fArray{};
-	unsigned long starCount; // workaround because dbgeng cannot lookup pointer types by string
+	bool fPointer {}, fStruct {}, fArray {};
+	unsigned long starCount {}; // workaround because dbgeng cannot lookup pointer types by string
 
 	// IG_DUMP_SYMBOL_INFO on a pointer of any order, like Foo****, will give fields of Foo correctly.
 	// Only need to track the number of dereferences

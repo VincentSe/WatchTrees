@@ -1038,7 +1038,8 @@ HRESULT expand_array(/*out*/TypedValueTree* w)
 
 HRESULT expand_iterator(/*out*/TypedValueTree* w, bool myVal)
 {
-	TypedValueTree ptr = TypedValueTree::FromField(w->FindField("_Ptr"), w->GetAddressOfData());
+	TypedValueTree ptr;
+	ptr.FromField(w->FindField("_Ptr"), w->GetAddressOfData());
 	if (!ptr.typeId)
 	{
 		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "_Ptr not found\n");
@@ -1059,8 +1060,7 @@ HRESULT expand_iterator(/*out*/TypedValueTree* w, bool myVal)
 		sub = new TypedValueTree();
 		insert_subwatch(sub, w);
 	}
-	sub->Prune();
-	*sub = TypedValueTree::FromField(myValField, ptr.GetAddressOfData());
+	sub->FromField(myValField, ptr.GetAddressOfData());
 
 	char iterType[2048];
 	g_ExtSymbols->GetTypeName(sub->module, sub->typeId, /*out*/iterType, 2048, 0);
@@ -1090,15 +1090,15 @@ TypedValueTree FindVectorFirst(const TypedValueTree& vec)
 	const LightField& myPair = vec.FindField("_Mypair");
 	if (myPair.TypeId)
 	{
-		v = TypedValueTree::FromField(myPair, vec.GetAddressOfData());
+		v.FromField(myPair, vec.GetAddressOfData());
 		v.FillFields();
 		const LightField& myVal2 = v.FindField("_Myval2");
-		v = TypedValueTree::FromField(myVal2, v.GetAddressOfData());
+		v.FromField(myVal2, v.GetAddressOfData());
 		v.FillFields();
-		v = TypedValueTree::FromField(v.FindField("_Myfirst"), v.GetAddressOfData());;
+		v.FromField(v.FindField("_Myfirst"), v.GetAddressOfData());;
 	}
 	else
-		v = TypedValueTree::FromField(vec.FindField("_Myfirst"), vec.GetAddressOfData());
+		v.FromField(vec.FindField("_Myfirst"), vec.GetAddressOfData());
 
 	return v;
 }
@@ -1208,81 +1208,76 @@ HRESULT expand_vector(/*out*/TypedValueTree& w)
 	return S_OK;
 }
 
-TypedValueTree TypedValueTree::FromField(const LightField& field, ULONG64 addr)
+void TypedValueTree::FromField(const LightField& field, ULONG64 addr)
 {
-	TypedValueTree t;
-	t.address = addr + field.address;
-	t.typeId = field.TypeId;
-	t.module = field.module;
-	t.fStruct = field.fStruct;
-	t.fArray = field.fArray;
-	t.fPointer = field.fPointer;
-	return t;
+	Prune();
+	this->address = addr + field.address;
+	this->typeId = field.TypeId;
+	this->module = field.module;
+	this->fStruct = field.fStruct;
+	this->fArray = field.fArray;
+	this->fPointer = field.fPointer;
+	this->starCount = this->fPointer ? 1 : 0;
 }
 
-TypedValueTree FindMapHead(const TypedValueTree& map)
+LightField FindMapHead(TypedValueTree& map, bool myHead,
+						/*out*/ ULONG64& myHeadAddress)
 {
-	TypedValueTree v;
-	LightField f;
-	const LightField& myPair = map.FindField("_Mypair");
-	if (myPair.TypeId)
+	if (myHead)
 	{
-		v = TypedValueTree::FromField(myPair, map.GetAddressOfData());
+		myHeadAddress = map.GetAddressOfData();
+		return map.FindField("_Myval");
+	}
+
+	TypedValueTree v;
+	LightField f = map.FindField("_Mypair");
+	if (f.TypeId)
+	{
+		v.FromField(f, map.GetAddressOfData());
 		v.FillFields();
 		f = v.FindField("_Myval2");
-		v = TypedValueTree::FromField(f, v.GetAddressOfData());
+		v.FromField(f, v.GetAddressOfData());
 		v.FillFields();
 		f = v.FindField("_Myval2");
-		v = TypedValueTree::FromField(f, v.GetAddressOfData());
+		v.FromField(f, v.GetAddressOfData());
 		v.FillFields();
-		v = TypedValueTree::FromField(v.FindField("_Myhead"), v.GetAddressOfData());;
+		f = v.FindField("_Myhead");
+		v.FromField(f, v.GetAddressOfData());
 	}
 	else
-		v = TypedValueTree::FromField(map.FindField("_Myhead"), map.GetAddressOfData());
+		v.FromField(map.FindField("_Myhead"), map.GetAddressOfData());
 
-	return v;
+	myHeadAddress = v.GetAddressOfData();
+	v.FillFields();
+	return v.FindField("_Myval");
+	// 	if (myHeadWatch.fields.empty())
+	//myHeadWatch.FillFields();
 }
 
 HRESULT expand_map(/*out*/TypedValueTree& w, bool myHead)
 {
-	TypedValueTree& myHeadWatch = myHead ? w : FindMapHead(w); // copy-construction after FindMapHead :(
-
-	if (!myHeadWatch.typeId)
-	{
-		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "_Myhead not found\n");
-		return S_FALSE;
-	}
-
-	if (myHeadWatch.fields.empty())
-		myHeadWatch.FillFields();
-
-	ULONG cb;
 	ULONG64 myHeadAddress = 0;
-	int ptrSize = sizeof(long*);
-	ReadMemory(myHeadWatch.address, &myHeadAddress, ptrSize, &cb);
-
-	const LightField& myVal = myHeadWatch.FindField("_Myval");
+	const LightField& myVal = FindMapHead(w, myHead, /*out*/myHeadAddress);
 	if (!myVal.TypeId)
 	{
 		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "_Myval not found\n");
 		return S_FALSE;	
 	}
 
-	DWORD pairTypeId = myVal.TypeId;
-	ULONG64 pairOffset = myVal.address;
-
 	char pairName[256];
-	g_ExtSymbols->GetTypeName(myVal.module, pairTypeId, /*out*/pairName, 256, &cb);
+	ULONG cb;
+	g_ExtSymbols->GetTypeName(myVal.module, myVal.TypeId, /*out*/pairName, 256, &cb);
 	
 	// Read least element of map
 	ULONG64 mapNode = 0;
+	const int ptrSize = sizeof(long*);
 	ReadMemory(myHeadAddress, &mapNode, ptrSize, &cb);
 
 	if (myHeadAddress == mapNode)
 		return S_OK; // empty map
 
 	TypedValueTree pairTemplate;
-	pairTemplate.typeId = pairTypeId;
+	pairTemplate.typeId = myVal.TypeId;
 	pairTemplate.module = myVal.module;
 	pairTemplate.type = pairName;
 	pairTemplate.starCount = 0; // it's the pair itself, not a pointer to it
@@ -1314,7 +1309,7 @@ HRESULT expand_map(/*out*/TypedValueTree& w, bool myHead)
 					insert_subwatch(sub, &w);
 				}
 				sub->fieldName = "[" + std::to_string(nbIter) + "]";
-				sub->address = mapNode + pairOffset;
+				sub->address = mapNode + myVal.address;
 				sub->CopyTypeInfo(pairTemplate);
 				nbIter++;
 				nbIterGuard++;
@@ -1335,7 +1330,7 @@ HRESULT expand_map(/*out*/TypedValueTree& w, bool myHead)
 						insert_subwatch(sub, &w);
 					}
 					sub->fieldName = "[" + std::to_string(nbIter) + "]";
-					sub->address = rightNode + pairOffset;
+					sub->address = rightNode + myVal.address;
 					sub->CopyTypeInfo(pairTemplate);
 					nbIter++;
 					nbIterGuard++;
@@ -1373,7 +1368,7 @@ HRESULT expand_map(/*out*/TypedValueTree& w, bool myHead)
 					insert_subwatch(sub, &w);
 				}
 				sub->fieldName = "[" + std::to_string(nbIter) + "]";
-				sub->address = mapNode + pairOffset;
+				sub->address = mapNode + myVal.address;
 				sub->CopyTypeInfo(pairTemplate);
 				nbIter++;
 				nbIterGuard++;
@@ -1402,40 +1397,61 @@ HRESULT expand_map(/*out*/TypedValueTree& w, bool myHead)
 ULONG64 listNext(ULONG64 nodeAddr)
 {
 	ULONG64 nextAddress = 0;
-	ReadMemory(nodeAddr, &nextAddress, 4, 0);
+	const int ptrSize = sizeof(int*);
+	ReadMemory(nodeAddr, &nextAddress, ptrSize, 0);
 	return nextAddress;
 }
 
-HRESULT expand_list(/*out*/TypedValueTree* w, bool myHead)
+// TODO merge with FindVectorFirst
+LightField FindListHead(TypedValueTree& map, bool myHead,
+						/*out*/ ULONG64& myHeadAddress)
 {
-	TypedValueTree& myHeadWatch = myHead ? *w : TypedValueTree::FromField(w->FindField("_Myhead"), w->GetAddressOfData());
-
-	if (!myHeadWatch.typeId)
+	if (myHead)
 	{
-		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "_Myhead not found\n");
-		return S_FALSE;
+		myHeadAddress = map.GetAddressOfData();
+		return map.FindField("_Myval");
 	}
 
-	if (myHeadWatch.fields.empty())
-		myHeadWatch.FillFields();
+	TypedValueTree v;
+	LightField f = map.FindField("_Mypair");
+	if (f.TypeId)
+	{
+		v.FromField(f, map.GetAddressOfData());
+		v.FillFields();
+		f = v.FindField("_Myval2");
+		v.FromField(f, v.GetAddressOfData());
+		v.FillFields();
+		f = v.FindField("_Myhead");
+		v.FromField(f, v.GetAddressOfData());
+	}
+	else
+		v.FromField(map.FindField("_Myhead"), map.GetAddressOfData());
 
-	w->Prune();
+	myHeadAddress = v.GetAddressOfData();
+	v.FillFields();
+	return v.FindField("_Myval");
+	// 	if (myHeadWatch.fields.empty())
+	//myHeadWatch.FillFields();
+}
 
-	const LightField& myVal = myHeadWatch.FindField("_Myval");
+HRESULT expand_list(/*out*/TypedValueTree& w, bool myHead)
+{
+	ULONG64 myHeadAddress = 0;
+	const LightField& myVal = FindListHead(w, myHead, /*out*/myHeadAddress);
 	if (!myVal.TypeId)
 	{
 		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "expand_list: _Myval not found\n");
 		return E_FAIL;	
 	}
-	ULONG elemTypeId = (ULONG)myVal.TypeId;
-	ULONG64 pairOffset = myVal.address;
+	w.Prune();
+
+	const ULONG elemTypeId = (ULONG)myVal.TypeId;
+	const ULONG64 pairOffset = myVal.address;
 
 	char pairName[1024];
 	g_ExtSymbols->GetTypeName(myVal.module, elemTypeId, /*out*/pairName, 1024, 0);
 
-	ULONG64 myHeadAddress = 0;
 	int ptrSize = sizeof(long*);
-	ReadMemory(myHeadWatch.address, &myHeadAddress, ptrSize, 0);
 	ULONG64 addr = myHeadAddress;
 	unsigned int nbIter = 0;
 	while ( (addr=listNext(addr))!=myHeadAddress && nbIter<200 ) // skip first empty head
@@ -1450,7 +1466,7 @@ HRESULT expand_list(/*out*/TypedValueTree* w, bool myHead)
 		sub->offset = nbIter;
 		sub->starCount = 0; // it's the pair itself, not a pointer to it
 		sub->dereferences = 0;
-		insert_subwatch(sub, w);
+		insert_subwatch(sub, &w);
 		nbIter++;
 	}
 	
@@ -1491,7 +1507,7 @@ void TypedValueTree::FillFieldsAndChildren()
 	}
 	else if (this->type.compare(0, 10, "std::list<") == 0)
 	{
-		expand_list(this, false);
+		expand_list(*this, false);
 	}
 	else if (this->type.compare(0, 9, "std::map<") == 0
 			|| this->type.compare(0, 9, "std::set<") == 0)
@@ -1502,7 +1518,7 @@ void TypedValueTree::FillFieldsAndChildren()
 	{
 		// Subclasses of std::map or std::list, where the _Myhead field was clicked to expand
 		if (this->type.compare(0, 10, "std::_List") == 0)
-			expand_list(this, true);
+			expand_list(*this, true);
 		else
 			expand_map(*this, true);
 		
