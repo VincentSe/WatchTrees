@@ -20,18 +20,51 @@ Copyright (c) 2017  Vincent Semeria
 #include <sstream>
 #include <algorithm>
 
-std::vector<std::unique_ptr<Watch>> gWatches;
+std::vector<Watch> gWatches;
 
-TypedValueTree::~TypedValueTree()
+TypedValueTree& TypedValueTree::operator=(TypedValueTree&& other)
 {
-	TypedValueTree* child = firstChild;
-	while (child)
-	{
-		TypedValueTree* wTmp = child->brother;
-		delete child;
-		child = wTmp;
-	}
+	fieldName = std::move(other.fieldName);
+	module = std::move(other.module);
+	typeId = std::move(other.typeId);
+	type = std::move(other.type);
+	fPointer = std::move(other.fPointer);
+	fStruct = std::move(other.fStruct);
+	fArray = std::move(other.fArray);
+	starCount = std::move(other.starCount);
+	dereferences = std::move(other.dereferences);
+	expanded = std::move(other.expanded);
+	address = std::move(other.address);
+	dynamicDereference = std::move(other.dynamicDereference);
+	fields = std::move(other.fields);
+	fieldCount = std::move(other.fieldCount);
+	TypeSize = std::move(other.TypeSize);
+	offset = std::move(other.offset);
+	children = std::move(other.children);
+	parent = std::move(other.parent);
+
+	for (TypedValueTree& c : this->children)
+		c.parent = this;
+	return *this;
 }
+
+TypedValueTree::TypedValueTree(TypedValueTree&& other)
+{
+	*this = std::forward<TypedValueTree&&>(other);
+}
+
+Watch& Watch::operator=(Watch&& other)
+{
+	expr = std::move(other.expr);
+	valTree = std::move(other.valTree);
+	return *this;
+}
+
+Watch::Watch(Watch&& other)
+{
+	*this = std::forward<Watch&&>(other);
+}
+
 
 int countFinalStars(const char* type)
 {
@@ -50,52 +83,28 @@ int countFinalStars(const char* type)
 	return starCount;
 }
 
-void insert_subwatch(TypedValueTree* w, TypedValueTree* where)
+std::vector<TypedValueTree>::iterator insert_subwatch(TypedValueTree&& w, TypedValueTree& where)
 {
-	w->parent = where;
-	TypedValueTree* child = where->firstChild;
-	if (!child || child->offset>w->offset)
-	{
-		w->brother = child;
-		where->firstChild = w;
-		return;
-	}
-	
-	while (child && child->brother
-	       && child->brother->offset < w->offset)
-		child = child->brother;
+	w.parent = &where;
+	auto child = where.children.begin();
+	auto endChildren = where.children.end();
+	while (child != endChildren && child->offset < w.offset)
+		child++;
 
-	w->brother = child->brother;
-	child->brother = w;
+	return where.children.insert(child, std::forward<TypedValueTree&&>(w));
 }
 
-void TypedValueTree::Prune(TypedValueTree* fromChild)
+void TypedValueTree::Prune(std::vector<TypedValueTree>::iterator fromChild)
 {
-	if (!fromChild || fromChild == this->firstChild)
-	{
-		// remove all children
-		fromChild = this->firstChild;
-		this->firstChild = 0;
-	}
-	else
-	{
-		TypedValueTree* prevBro = this->firstChild;
-		if (prevBro && prevBro != fromChild)
-			while (prevBro->brother && prevBro->brother != fromChild)
-				prevBro = prevBro->brother;
-		prevBro->brother = 0;
-	}
-	
-	while (fromChild)
-	{
-		TypedValueTree* bro = fromChild->brother;
-		delete fromChild;
-		fromChild = bro;
-	}
-	
+	children.erase(fromChild, children.end());
 	fields.clear();
 	if (!fArray)
 		fieldCount = 0;
+}
+
+void TypedValueTree::Prune()
+{
+	Prune(children.begin());
 }
 
 struct GetFieldRequest
@@ -269,7 +278,7 @@ HRESULT TypedValueTree::GetField(unsigned long fieldOffset,	/*out*/LightField& f
 	return S_OK;
 }
 
-bool find_watch_position(const TypedValueTree* w, const TypedValueTree* where, /*out*/int* ptr, /*out*/unsigned int* count)
+bool find_watch_position(const TypedValueTree& w, const TypedValueTree& where, /*out*/int* ptr, /*out*/unsigned int* count)
 {
 	if (*count >= 16)
 	{
@@ -277,22 +286,18 @@ bool find_watch_position(const TypedValueTree* w, const TypedValueTree* where, /
 		return 0;
 	}
 	
-	// count should be 0 at init
-	if (!where)
-		return false; // not found
-
-	if (w == where)
+	if (&w == &where)
 		return true;
 
 	int saveCount = *count;
 	bool found = false;
-	TypedValueTree* child = where->firstChild;
-	while (!found && child)
+	auto child = where.children.begin();
+	while (!found && child != where.children.end())
 	{
 		ptr[saveCount] = child->offset;
 		*count = saveCount + 1;
-		found = find_watch_position(w, child, ptr, count);
-		child = child->brother;
+		found = find_watch_position(w, *child, ptr, count);
+		child++;
 	}
 	return found;
 }
@@ -658,7 +663,7 @@ void TypedValueTree::Print(long indent, std::vector<WatchLine>& output)
 		return;
 
 	// Recursively print fields, pointed basic values and subwatches
-	if (this->fPointer && addr && fieldCount == 0 && !this->firstChild)
+	if (this->fPointer && addr && fieldCount == 0 && this->children.empty())
 	{
 		// Pointed basic value, print it without name and type
 		output.resize(output.size() + 1);
@@ -667,34 +672,34 @@ void TypedValueTree::Print(long indent, std::vector<WatchLine>& output)
 	else
 	{
 		// Print children and fields, children having a higher priority than fields
-		TypedValueTree* notYetPrintedChild = this->firstChild;
+		auto notYetPrintedChild = this->children.begin();
 		if ((this->starCount == this->dereferences || this->starCount == this->dereferences + 1)
 			&& !TransformedType() && addr)
 			for (ULONG i = 0; i < fieldCount; i++)
 			{
 				// Either print the i-th field or its subwatch
-				TypedValueTree* child = notYetPrintedChild;
-				while (child)
+				auto child = notYetPrintedChild;
+				while (child != this->children.end())
 				{
 					if (child->offset == i) break;
-					child = child->brother;
+					child++;
 				}
-				if (child)
+				if (child != this->children.end())
 				{
 					// addr may have been modified because this watch is a pointer, or higher up in the call stack
 					child->address = addr + fields[i].address;
 					child->Print(indent + 2, output);
-					notYetPrintedChild = child->brother;
+					notYetPrintedChild = child+1;
 				}
 				else
 					output.push_back(print_field(fields[i], this->module, addr, indent + 2));
 			}
 
 		// Finish printing children
-		while (notYetPrintedChild)
+		while (notYetPrintedChild != this->children.end())
 		{
 			notYetPrintedChild->Print(indent + 2, output); // TODO update child's address
-			notYetPrintedChild = notYetPrintedChild->brother;
+			notYetPrintedChild++;
 		}
 	}
 }
@@ -717,49 +722,17 @@ ULONG64 TypedValueTree::GetAddressOfData() const
 	return addr;
 }
 
-TypedValueTree* remove_watch(unsigned int offset, TypedValueTree* parent)
-{
-	if (!parent->firstChild)
-		return 0; // parent empty
-	
-	TypedValueTree* w = 0;
-	if (offset == parent->firstChild->offset)
-	{
-		w = parent->firstChild;
-		parent->firstChild = parent->firstChild->brother;
-	}
-	else
-	{
-		TypedValueTree* bigBro = parent->firstChild;
-		while (bigBro->brother->offset < offset)
-			bigBro = bigBro->brother;
-		if (bigBro->brother->offset != offset)
-			return 0; // offset not found
-		
-		w = bigBro->brother;
-		bigBro->brother = bigBro->brother->brother;
-	}
-	w->parent = 0;
-	return w;
-}
-
-// TODO only find valTree, inside a valTree
 TypedValueTree* TypedValueTree::FindWatchPath(const unsigned int* watchPos, int depth)
 {
-	//g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "find watch: %d depth %d\n", watchPos[0], depth);
 	if (depth == 0)
 		return this;
 
-	if (!this || !this->firstChild)
-		return 0; // not found
-
-	TypedValueTree* w = this->firstChild;
-	while (w->brother && w->offset < watchPos[0])
-		w = w->brother;
-	if (w->offset != watchPos[0])
-		return 0;
-
-	return w->FindWatchPath(watchPos+1, depth-1);
+	const int firstIndex = watchPos[0];
+	auto w = std::find_if(children.begin(), children.end(),
+		[firstIndex](const TypedValueTree& c) { return c.offset >= firstIndex; }); // optimization because children offsets are sorted, we really search for ==
+	return (w == children.end() || w->offset != firstIndex)
+		? 0 // not found
+		: w->FindWatchPath(watchPos+1, depth-1);
 }
 
 struct slv_args
@@ -1028,7 +1001,7 @@ HRESULT expand_array(/*out*/TypedValueTree* w)
 		sub->offset = nbIter;
 		sub->starCount = 0; //starCount;
 		sub->dereferences = 0;
-		insert_subwatch(sub, w);
+		insert_subwatch(std::move(*sub), *w);
 
 		nbIter++;
 	}
@@ -1054,11 +1027,11 @@ HRESULT expand_iterator(/*out*/TypedValueTree* w, bool myVal)
 		return E_FAIL;
 	}
 	
-	TypedValueTree* sub = w->firstChild; // TODO delete other children
-	if (!sub)
+	auto sub = w->children.begin(); // TODO delete other children
+	if (sub == w->children.end())
 	{
-		sub = new TypedValueTree();
-		insert_subwatch(sub, w);
+		insert_subwatch(std::move(*new TypedValueTree()), *w);
+		sub = w->children.begin();
 	}
 	sub->FromField(myValField, ptr.GetAddressOfData());
 
@@ -1084,28 +1057,26 @@ LightField TypedValueTree::FindField(const char* fieldName) const
 	return it == this->fields.end() ? LightField() : *it;
 }
 
-TypedValueTree FindVectorFirst(const TypedValueTree& vec)
+void FindVectorFirst(const TypedValueTree& vec, /*out*/TypedValueTree& myFirst)
 {
-	TypedValueTree v;
 	const LightField& myPair = vec.FindField("_Mypair");
 	if (myPair.TypeId)
 	{
-		v.FromField(myPair, vec.GetAddressOfData());
-		v.FillFields();
-		const LightField& myVal2 = v.FindField("_Myval2");
-		v.FromField(myVal2, v.GetAddressOfData());
-		v.FillFields();
-		v.FromField(v.FindField("_Myfirst"), v.GetAddressOfData());;
+		myFirst.FromField(myPair, vec.GetAddressOfData());
+		myFirst.FillFields();
+		const LightField& myVal2 = myFirst.FindField("_Myval2");
+		myFirst.FromField(myVal2, myFirst.GetAddressOfData());
+		myFirst.FillFields();
+		myFirst.FromField(myFirst.FindField("_Myfirst"), myFirst.GetAddressOfData());;
 	}
 	else
-		v.FromField(vec.FindField("_Myfirst"), vec.GetAddressOfData());
-
-	return v;
+		myFirst.FromField(vec.FindField("_Myfirst"), vec.GetAddressOfData());
 }
 
 HRESULT expand_vector(/*out*/TypedValueTree& w)
 {
-	const TypedValueTree& myFirst = FindVectorFirst(w);
+	TypedValueTree myFirst;
+	FindVectorFirst(w, /*out*/myFirst);
 	if (!myFirst.typeId)
 	{
 		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "get field _Myfirst failed\n");
@@ -1130,7 +1101,7 @@ HRESULT expand_vector(/*out*/TypedValueTree& w)
 
 	// Read first and last element pointers
 	const int ptrSize = sizeof(long*);
-	ULONG64 first = myFirst.GetAddressOfData();
+	const ULONG64 first = myFirst.GetAddressOfData();
 	ULONG64 last = 0;
 	if (!ReadMemory(myFirst.address + ptrSize, &last, ptrSize, &cb))
 	{
@@ -1177,34 +1148,16 @@ HRESULT expand_vector(/*out*/TypedValueTree& w)
 	}
 
 	unsigned int nbIter = 0;
-	TypedValueTree* sub;
-	TypedValueTree* child = w.firstChild;
-	while (first<last && nbIter<200)
+	w.children.resize(min(200, (last - first) / elemSize));
+	for (TypedValueTree& child : w.children)
 	{
-		// add subwatches
-		if (child)
-		{
-			sub = child;
-			child = child->brother;
-		}
-		else
-		{
-			sub = new TypedValueTree();
-			sub->offset = nbIter;
-			insert_subwatch(sub, &w);
-		}
-
-		sub->fieldName = "[" + std::to_string(nbIter) + "]";
-		sub->CopyTypeInfo(itemTemplate);
-		sub->address = first;
-
-		first += elemSize;
+		child.offset = nbIter;
+		child.parent = &w;
+		child.fieldName = "[" + std::to_string(nbIter) + "]";
+		child.CopyTypeInfo(itemTemplate);
+		child.address = first + nbIter*elemSize;
 		nbIter++;
-	}
-
-	if (child)
-		w.Prune(child);
-	
+	}	
 	return S_OK;
 }
 
@@ -1287,7 +1240,7 @@ HRESULT expand_map(/*out*/TypedValueTree& w, bool myHead)
 	char iterState = 'd'; // down
 	unsigned int nbIter = 0, nbIterGuard = 0;
 	ULONG64 leftNode, rightNode, parentNode;
-	TypedValueTree* child = w.firstChild;
+	auto child = w.children.begin();
 	TypedValueTree* sub;
 	while (nbIterGuard < 200)
 	{
@@ -1297,17 +1250,14 @@ HRESULT expand_map(/*out*/TypedValueTree& w, bool myHead)
 			ReadMemory(mapNode, &leftNode, ptrSize, &cb);
 			if (leftNode == myHeadAddress) // leaf
 			{
-				if (child)
-				{
-					sub = child;
-					child = child->brother;
-				}
-				else
+				if (child == w.children.end())
 				{
 					sub = new TypedValueTree();
 					sub->offset = nbIter;
-					insert_subwatch(sub, &w);
+					child = insert_subwatch(std::move(*sub), w);
 				}
+				sub = &*child;
+				child++;
 				sub->fieldName = "[" + std::to_string(nbIter) + "]";
 				sub->address = mapNode + myVal.address;
 				sub->CopyTypeInfo(pairTemplate);
@@ -1318,17 +1268,14 @@ HRESULT expand_map(/*out*/TypedValueTree& w, bool myHead)
 				ReadMemory(mapNode + 2*ptrSize, &rightNode, ptrSize, &cb);
 				if (rightNode != myHeadAddress)
 				{
-					if (child)
-					{
-						sub = child;
-						child = child->brother;
-					}
-					else
+					if (child == w.children.end())
 					{
 						sub = new TypedValueTree();
 						sub->offset = nbIter;
-						insert_subwatch(sub, &w);
+						child = insert_subwatch(std::move(*sub), w);
 					}
+					sub = &*child;
+					child++;
 					sub->fieldName = "[" + std::to_string(nbIter) + "]";
 					sub->address = rightNode + myVal.address;
 					sub->CopyTypeInfo(pairTemplate);
@@ -1356,17 +1303,14 @@ HRESULT expand_map(/*out*/TypedValueTree& w, bool myHead)
 			if (mapNode == leftNode) // current node is the left child of its parent
 			{
 				mapNode = parentNode;
-				if (child)
-				{
-					sub = child;
-					child = child->brother;
-				}
-				else
+				if (child == w.children.end())
 				{
 					sub = new TypedValueTree();
 					sub->offset = nbIter;
-					insert_subwatch(sub, &w);
+					child = insert_subwatch(std::move(*sub), w);
 				}
+				sub = &*child;
+				child++;
 				sub->fieldName = "[" + std::to_string(nbIter) + "]";
 				sub->address = mapNode + myVal.address;
 				sub->CopyTypeInfo(pairTemplate);
@@ -1388,7 +1332,7 @@ HRESULT expand_map(/*out*/TypedValueTree& w, bool myHead)
 		nbIterGuard++; // just in case
 	}
 
-	if (child)
+	if (child != w.children.end())
 		w.Prune(child);
 	
 	return S_OK;
@@ -1466,7 +1410,7 @@ HRESULT expand_list(/*out*/TypedValueTree& w, bool myHead)
 		sub->offset = nbIter;
 		sub->starCount = 0; // it's the pair itself, not a pointer to it
 		sub->dereferences = 0;
-		insert_subwatch(sub, &w);
+		insert_subwatch(std::move(*sub), w);
 		nbIter++;
 	}
 	
@@ -1539,14 +1483,10 @@ void TypedValueTree::FillFieldsAndChildren()
 		// double-pointer expand
 		// TRY SymGetTypeInfo BASE TYPE
 
-		TypedValueTree* sub = this->firstChild;
-		if (sub)
-			sub->Prune();
-		else
-		{
-			sub = new TypedValueTree();
-			insert_subwatch(sub, this);
-		}
+		if (children.empty())
+			insert_subwatch(std::move(*new TypedValueTree()), *this);
+		TypedValueTree* sub = &this->children[0];
+		sub->Prune();
 		sub->fieldName = "[0]";
 		sub->offset = 0;
 		sub->type = this->type;
@@ -1604,6 +1544,5 @@ TypedValueTree* TypedValueTree::NewSubWatch(long offset)
 	w->type = type;
 	w->starCount = countFinalStars(w->type.c_str());
 
-	insert_subwatch(w, this);
-	return w;
+	return &*insert_subwatch(std::move(*w), *this);
 }

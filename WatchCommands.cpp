@@ -18,7 +18,7 @@ new_watch(PDEBUG_CLIENT4 Client, PCSTR args)
 	Watch* w = new Watch();
 	w->valTree.offset = (unsigned long)gWatches.size();
 	w->expr = args;
-	gWatches.emplace_back(w);
+	gWatches.emplace_back(std::move(*w));
 	return S_OK;
 }
 
@@ -37,7 +37,7 @@ rename_watch(PDEBUG_CLIENT4 Client, PCSTR args)
 		return E_FAIL;
 	}
 
-	Watch& w = *gWatches[offset];
+	Watch& w = gWatches[offset];
 	w.valTree.Prune();
 	w.valTree.typeId = 0;
 	w.valTree.address = 0;
@@ -107,13 +107,13 @@ expand_watch(PDEBUG_CLIENT4 Client, PCSTR args)
 		goto expand_watch_finish;
 	}
 
-	TypedValueTree* w = &gWatches[watchPos[0]]->valTree;
+	TypedValueTree* w = &gWatches[watchPos[0]].valTree;
 	if (depth >= 2)
 		w = w->FindWatchPath(watchPos + 1, depth - 1);
 
 	if (!w)
 	{
-		TypedValueTree* parent = gWatches[watchPos[0]]->valTree.FindWatchPath(watchPos + 1, depth - 2);
+		TypedValueTree* parent = gWatches[watchPos[0]].valTree.FindWatchPath(watchPos + 1, depth - 2);
 		if (parent)
 		{
 			w = parent->NewSubWatch(watchPos[depth - 1]);
@@ -164,7 +164,7 @@ collapse_watch(PDEBUG_CLIENT Client, PCSTR args)
 		pch = strtok(NULL, " ");
 		depth++;
 	}
-	TypedValueTree* w = &gWatches[watchPos[0]]->valTree;
+	TypedValueTree* w = &gWatches[watchPos[0]].valTree;
 	if (depth >= 2)
 		w = w->FindWatchPath(watchPos+1, depth-1);
 	if (!w)
@@ -190,17 +190,17 @@ print_watches(PDEBUG_CLIENT4 Client, PCSTR args)
 	watchLines[0].name = "  Name";
 	watchLines[0].value = "Value";
 	watchLines[0].type = "Type";
-	for (std::unique_ptr<Watch>& w : gWatches)
+	for (Watch& w : gWatches)
 	{
 		HRESULT eval = S_OK;
 		if (reeval)
-			eval = w->evaluate();
+			eval = w.evaluate();
 		if (eval == S_OK)
-			w->Print(/*out*/watchLines);
+			w.Print(/*out*/watchLines);
 		else
 		{
 			watchLines.resize(watchLines.size() + 1);
-			watchLines.back().name = "  " + w->expr;
+			watchLines.back().name = "  " + w.expr;
 			watchLines.back().type = "### OUT OF SCOPE ###";
 		}
 	}
@@ -259,7 +259,7 @@ set_watch_value(PDEBUG_CLIENT4 Client, PCSTR args)
 		return E_FAIL;
 	}
 
-	TypedValueTree* w = gWatches[watchPos[0]]->valTree.FindWatchPath(watchPos + 1, depth - 1);
+	TypedValueTree* w = gWatches[watchPos[0]].valTree.FindWatchPath(watchPos + 1, depth - 1);
 	TypedValueTree* parent = 0;
 	ULONG64 TypeId = 0;
 	ULONG64 Module = 0, Address = 0;
@@ -275,7 +275,7 @@ set_watch_value(PDEBUG_CLIENT4 Client, PCSTR args)
 	}
 	else
 	{
-		parent = gWatches[watchPos[0]]->valTree.FindWatchPath(watchPos + 1, depth - 2);
+		parent = gWatches[watchPos[0]].valTree.FindWatchPath(watchPos + 1, depth - 2);
 		if (parent)
 		{
 			// set a field of parent, don't create subwatch
@@ -396,7 +396,7 @@ test_sym(PDEBUG_CLIENT4 Client, PCSTR args)
 	ULONG64 hProcess = 0;
 	g_ExtSystem->GetCurrentProcessHandle(/*out*/&hProcess);
 	DWORD type = 0;
-	ULONG64 Module = gWatches[0]->valTree.module;
+	ULONG64 Module = gWatches[0].valTree.module;
 	WCHAR* symName;
 	char name[1024];
 	for (ULONG SymbolId = 0; SymbolId<100; SymbolId++)

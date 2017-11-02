@@ -37,9 +37,14 @@ struct WatchLine
 class TypedValueTree
 {
 public:
-	~TypedValueTree();
+	TypedValueTree() = default;
+	TypedValueTree(const TypedValueTree& other) = delete; // deep copies are useless in this project
+	TypedValueTree& operator=(const TypedValueTree& other) = delete;
+	TypedValueTree& operator=(TypedValueTree&& other);
+	TypedValueTree(TypedValueTree&& other);
 
-	void Prune(TypedValueTree* fromChild = 0);
+	void Prune();
+	void Prune(std::vector<TypedValueTree>::iterator fromChild);
 	void Print(long indent, std::vector<WatchLine>& output); // updates addresses during the print
 	void CopyTypeInfo(const TypedValueTree& other);
 
@@ -87,13 +92,16 @@ public:
 	unsigned long TypeSize{};
 
 	unsigned long offset {}; // class or struct's field number in parent watch
-	TypedValueTree* firstChild {};
-	TypedValueTree* brother {}; // singly-linked list
+	std::vector<TypedValueTree> children;
 	TypedValueTree* parent {};
 };
 
 struct Watch
 {
+	Watch() = default;
+	Watch(Watch&& other);
+	Watch& operator=(Watch&& other);
+
 	std::string expr;
 	TypedValueTree valTree;
 	
@@ -101,7 +109,4 @@ struct Watch
 	void Print(std::vector<WatchLine>& output);
 };
 
-// Don't use vector<Watch>, there are pointers in Watch that we don't want to manage when the vector is resized.
-extern std::vector<std::unique_ptr<Watch>> gWatches; 
-
-
+extern std::vector<Watch> gWatches; 
