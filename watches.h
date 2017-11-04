@@ -16,7 +16,6 @@ struct LightField
 {
 	char fName[128];
 	ULONG TypeId{};
-	//ULONG64 indexInParentType; // looks incremental
 	ULONG64 module{};
 	ULONG64 address{}; // memoryOffsetInParent;
 	bool fStruct{};

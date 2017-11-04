@@ -184,74 +184,74 @@ ULONG WDBGAPI fieldCallBack(FIELD_INFO* pField, PVOID UserContext)
 	return 0;
 }
 
-ULONG sym_get_type_info(ULONG64 Module, ULONG TypeId,
-	/*out*/ std::vector<LightField>& fields,
-	long uniqueField)
+void sym_get_type_info(ULONG64 Module,
+						ULONG TypeId,
+						/*out*/ std::vector<LightField>& fields)
 {
-	// DIFFICULT TO RESOLVE DERIVATIONS BETWEEN TYPES
 	fields.clear();
 
-	int i;
 	ULONG64 hProcess = 0;
 	g_ExtSystem->GetCurrentProcessHandle(/*out*/&hProcess);
-	BOOL b;
-	DWORD type = 0;
-	b = SymGetTypeInfo((HANDLE)hProcess, Module, TypeId, TI_GET_TYPE, &type);
+	DWORD childrenCount = 0;
+	BOOL b = SymGetTypeInfo((HANDLE)hProcess, Module, TypeId, TI_GET_CHILDRENCOUNT, &childrenCount); // fields and methods of TypeId
 	if (!b)
 	{
-		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "Failed to get type %d\n", TypeId);
-		return 0;
+		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "Failed to get children of type %d\n", TypeId);
+		return;
 	}
-	DWORD childrenCount = 0;
-	b = SymGetTypeInfo((HANDLE)hProcess, Module, type, TI_GET_CHILDRENCOUNT, &childrenCount); // fields and methods of type
 
 	std::vector<ULONG> ids(childrenCount + 2);
 	ids[0] = childrenCount; // child count
 	ids[1] = 0; // start child
-	b = SymGetTypeInfo((HANDLE)hProcess, Module, type, TI_FINDCHILDREN, &ids.front());
+	b = SymGetTypeInfo((HANDLE)hProcess, Module, TypeId, TI_FINDCHILDREN, &ids.front());
 
 	WCHAR* symName = 0;
-	int nbField = 0;
-	for (i = 2; i < ids.size(); i++)
+	for (int i = 2; i < ids.size(); i++)
 	{
-		b = SymGetTypeInfo((HANDLE)hProcess, Module, ids[i], TI_GET_TYPE, /*out*/&type); // convert incremental field index ids[i] to field's type
-		DWORD symtag;
-		b = SymGetTypeInfo((HANDLE)hProcess, Module, type, TI_GET_SYMTAG, /*out*/&symtag);
+		DWORD symtag = 0;
+		b = SymGetTypeInfo((HANDLE)hProcess, Module, ids[i], TI_GET_SYMTAG, /*out*/&symtag);
 
-		DWORD kind, addr;
-		if (SymGetTypeInfo((HANDLE)hProcess, Module, ids[i], TI_GET_DATAKIND, /*out*/&kind)
-			&& SymGetTypeInfo((HANDLE)hProcess, Module, ids[i], TI_GET_OFFSET, /*out*/&addr)) // don't handle static fields for now
+		DWORD addr = 0, virtualAddr = 0;
+		//b = SymGetTypeInfo((HANDLE)hProcess, Module, ids[i], TI_GET_VIRTUALBASEPOINTEROFFSET, /*out*/&virtualAddr);
+
+		if ((symtag == 18 // base class
+			|| symtag == 7) // data
+			&& SymGetTypeInfo((HANDLE)hProcess, Module, ids[i], TI_GET_OFFSET, /*out*/&addr)) // Skip static fields. Optim : only query addr when the symtag is correct.
 		{
-			if (uniqueField < 0 || nbField == uniqueField)
+			if (symtag == 7)
 			{
-				fields.resize(fields.size() + 1);
-				LightField& field = fields.back();
-				if (SymGetTypeInfo((HANDLE)hProcess, Module, ids[i], TI_GET_SYMNAME, /*out*/&symName))
-				{
-					std::wcstombs(/*out*/field.fName, symName, 128);
-					LocalFree(symName); symName = 0;
-				}
-
-				field.TypeId = ids[i];
-				//field.indexInParentType = ids[i];
-				field.address = addr;
-				field.module = Module;
-
-				switch (symtag)
-				{
-				case 11: field.fStruct = true;
-					break;
-				case 14: field.fPointer = true;
-					break;
-				case 15: field.fArray = true;
-					break;
-				}
+				// Find which kind of data this field is
+				ULONG fieldType = 0;
+				SymGetTypeInfo((HANDLE)hProcess, Module, ids[i], TI_GET_TYPE, /*out*/&fieldType);
+				SymGetTypeInfo((HANDLE)hProcess, Module, fieldType, TI_GET_SYMTAG, /*out*/&symtag);
 			}
-			nbField++;
+			fields.resize(fields.size() + 1);
+			LightField& field = fields.back();
+			if (SymGetTypeInfo((HANDLE)hProcess, Module, ids[i], TI_GET_SYMNAME, /*out*/&symName))
+			{
+				std::wcstombs(/*out*/field.fName, symName, 128);
+				LocalFree(symName); symName = 0;
+			}
+
+			field.TypeId = ids[i];
+			field.address = addr;
+			field.module = Module;
+
+			switch (symtag)
+			{
+			case 11:
+			case 18: // display fields of the base class instead ?
+				field.fStruct = true;
+				break;
+			case 14:
+				field.fPointer = true;
+				break;
+			case 15:
+				field.fArray = true;
+				break;
+			}
 		}
 	}
-
-	return 0;
 }
 
 HRESULT TypedValueTree::GetField(unsigned long fieldOffset,	/*out*/LightField& fieldDesc) const
@@ -493,6 +493,10 @@ void TypedValueTree::FillFields()
 
 	if (fArray || !this->module)
 		return;
+
+	//sym_get_type_info(this->module, this->typeId, /*out*/this->fields);
+	//this->fieldCount = this->fields.size();
+	//return;
 
 	// Auto-dereferences pointer types, but not virtual inheritance.
 	// g_ExtSymbols->OutputTypedDataVirtual is too slow, because it resolves virtual inheritance for all base classes.

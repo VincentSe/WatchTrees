@@ -143,8 +143,9 @@ expand_watch_finish:
 }
 
 HRESULT CALLBACK
-collapse_watch(PDEBUG_CLIENT Client, PCSTR args)
+collapse_watch(PDEBUG_CLIENT4 Client, PCSTR args)
 {
+	if (InitDebuggerGlobals(Client) != S_OK) return E_FAIL;
 	UNREFERENCED_PARAMETER(Client);
 
 	char* pch = strtok((char*)args, " ");
@@ -152,7 +153,7 @@ collapse_watch(PDEBUG_CLIENT Client, PCSTR args)
 	{
 		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "Unknown watch to collapse\n");
 		DestroyDebuggerGlobals();
-		return S_FALSE;
+		return E_FAIL;
 	}
 
 	// Parse numbers separated by spaces
@@ -164,6 +165,14 @@ collapse_watch(PDEBUG_CLIENT Client, PCSTR args)
 		pch = strtok(NULL, " ");
 		depth++;
 	}
+
+	if (watchPos[0] < 0 || watchPos[0] >= gWatches.size())
+	{
+		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "Unknown watch to expand %d\n", watchPos[0]);
+		DestroyDebuggerGlobals();
+		return E_FAIL;
+	}
+
 	TypedValueTree* w = &gWatches[watchPos[0]].valTree;
 	if (depth >= 2)
 		w = w->FindWatchPath(watchPos+1, depth-1);
