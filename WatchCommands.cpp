@@ -41,7 +41,6 @@ rename_watch(PDEBUG_CLIENT4 Client, PCSTR args)
 	w.valTree.Prune();
 	w.valTree.typeId = 0;
 	w.valTree.address = 0;
-	w.valTree.dynamicDereference = 0;
 	w.expr = watchName;
 
 	DestroyDebuggerGlobals();
@@ -289,7 +288,7 @@ set_watch_value(PDEBUG_CLIENT4 Client, PCSTR args)
 		{
 			// set a field of parent, don't create subwatch
 			ULONG offset = watchPos[depth - 1];
-			LightField fieldDesc;
+			Field fieldDesc;
 			if (parent->GetField(offset, /*out*/fieldDesc) == S_OK)
 			{
 				TypeId = fieldDesc.TypeId;
@@ -308,7 +307,7 @@ set_watch_value(PDEBUG_CLIENT4 Client, PCSTR args)
 				if (typeName[strlen(typeName) - 1] == '*')
 				{
 					// set pointed value
-					Address = parent->dynamicDereference;
+					Address = 0; // parent->dynamicDereference;
 					typeName[strlen(typeName) - 1] = 0;
 				}
 			}
@@ -388,6 +387,35 @@ set_watch_value(PDEBUG_CLIENT4 Client, PCSTR args)
 	return S_OK;
 }
 
+struct SymEnumContext
+{
+	ULONG64 hProcess = 0;
+};
+
+BOOL symbolCallback(
+	_In_ PSYMBOL_INFO pSymInfo,
+	_In_ ULONG SymbolSize,
+	_In_opt_ PVOID UserContext
+	)
+{
+	SymEnumContext* context = (SymEnumContext*)UserContext;
+
+	WCHAR* symName;
+	DWORD symTag = 0;
+	char name[1024];
+	SymGetTypeInfo((HANDLE)context->hProcess, pSymInfo->ModBase, pSymInfo->TypeIndex, TI_GET_SYMTAG, /*out*/&symTag);
+	g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "%s %d\n", pSymInfo->Name, symTag);
+	//if (SymGetTypeInfo((HANDLE)context->hProcess, pSymInfo->ModBase, pSymInfo->TypeIndex, TI_GET_SYMNAME, /*out*/&symName))
+	//{
+	//	std::wcstombs(/*out*/name, symName, 1024);
+	//	g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "%s %d\n", name, symTag);
+	//	LocalFree(symName); symName = 0;
+	//}
+	//else
+	//	g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "UNNAMMED SYMBOL %d\n", symTag);
+	return true;
+}
+
 HRESULT CALLBACK
 test_sym(PDEBUG_CLIENT4 Client, PCSTR args)
 {
@@ -402,25 +430,30 @@ test_sym(PDEBUG_CLIENT4 Client, PCSTR args)
 
 	if (InitDebuggerGlobals(Client) != S_OK) return E_FAIL;
 
-	ULONG64 hProcess = 0;
-	g_ExtSystem->GetCurrentProcessHandle(/*out*/&hProcess);
+	SymEnumContext context;
+	g_ExtSystem->GetCurrentProcessHandle(/*out*/&context.hProcess);
 	DWORD type = 0;
 	ULONG64 Module = gWatches[0].valTree.module;
-	WCHAR* symName;
-	char name[1024];
-	for (ULONG SymbolId = 0; SymbolId<100; SymbolId++)
-	{
-		DWORD symTag = 0;
-		SymGetTypeInfo((HANDLE)hProcess, Module, SymbolId, TI_GET_SYMTAG, /*out*/&symTag);
-		if (SymGetTypeInfo((HANDLE)hProcess, Module, SymbolId, TI_GET_SYMNAME, /*out*/&symName))
-		{
-			std::wcstombs(/*out*/name, symName, 1024);
-			g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "%s %d\n", name, symTag);
-			LocalFree(symName); symName = 0;
-		}
-		else
-			g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "UNNAMMED SYMBOL %d\n", symTag);
-	}
+	char* mask = "";
+	
+	BOOL b = SymEnumSymbols((HANDLE)context.hProcess, Module, mask, &symbolCallback, &context);
+
+
+	//WCHAR* symName;
+	//char name[1024];
+	//for (ULONG SymbolId = 0; SymbolId<100; SymbolId++)
+	//{
+	//	DWORD symTag = 0;
+	//	SymGetTypeInfo((HANDLE)hProcess, Module, SymbolId, TI_GET_SYMTAG, /*out*/&symTag);
+	//	if (SymGetTypeInfo((HANDLE)hProcess, Module, SymbolId, TI_GET_SYMNAME, /*out*/&symName))
+	//	{
+	//		std::wcstombs(/*out*/name, symName, 1024);
+	//		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "%s %d\n", name, symTag);
+	//		LocalFree(symName); symName = 0;
+	//	}
+	//	else
+	//		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "UNNAMMED SYMBOL %d\n", symTag);
+	//}
 
 	DestroyDebuggerGlobals();
 	return S_OK;

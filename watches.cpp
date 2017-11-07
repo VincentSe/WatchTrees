@@ -35,7 +35,6 @@ TypedValueTree& TypedValueTree::operator=(TypedValueTree&& other)
 	dereferences = std::move(other.dereferences);
 	expanded = std::move(other.expanded);
 	address = std::move(other.address);
-	dynamicDereference = std::move(other.dynamicDereference);
 	fields = std::move(other.fields);
 	fieldCount = std::move(other.fieldCount);
 	TypeSize = std::move(other.TypeSize);
@@ -107,25 +106,25 @@ void TypedValueTree::Prune()
 	Prune(children.begin());
 }
 
-struct GetFieldRequest
-{
-	GetFieldRequest()
-	{
-		ZeroMemory(this, sizeof(GetFieldRequest));
-		baseData.Operation = EXT_TDOP_GET_FIELD;
-		baseData.InStrIndex = (ULONG64)fieldName - (ULONG64)this; // offset so that the request finds expr
-	}
-
-	void Reset()
-	{
-		ZeroMemory(this, sizeof(GetFieldRequest));
-		baseData.Operation = EXT_TDOP_GET_FIELD;
-		baseData.InStrIndex = (ULONG64)fieldName - (ULONG64)this;
-	}
-	
-	EXT_TYPED_DATA baseData;
-	char fieldName[256];
-};
+//struct GetFieldRequest
+//{
+//	GetFieldRequest()
+//	{
+//		ZeroMemory(this, sizeof(GetFieldRequest));
+//		baseData.Operation = EXT_TDOP_GET_FIELD;
+//		baseData.InStrIndex = (ULONG64)fieldName - (ULONG64)this; // offset so that the request finds expr
+//	}
+//
+//	void Reset()
+//	{
+//		ZeroMemory(this, sizeof(GetFieldRequest));
+//		baseData.Operation = EXT_TDOP_GET_FIELD;
+//		baseData.InStrIndex = (ULONG64)fieldName - (ULONG64)this;
+//	}
+//	
+//	EXT_TYPED_DATA baseData;
+//	char fieldName[256];
+//};
 
 bool TypedValueTree::TransformedType() const
 {
@@ -135,7 +134,6 @@ bool TypedValueTree::TransformedType() const
 		|| this->type.compare(0, 9, "std::map<") == 0
 		|| this->type.compare(0, 9, "std::set<") == 0
 		|| this->type.compare(0, 10, "std::list<") == 0
-//		|| this->type.compare(0, 18, "std::basic_string<") == 0
 		|| this->type.compare(0, 25, "std::_Tree_const_iterator") == 0
 		|| this->type.compare(0, 19, "std::_Tree_iterator") == 0
 		|| this->type.compare(0, 21, "std::_Vector_iterator") == 0
@@ -143,57 +141,67 @@ bool TypedValueTree::TransformedType() const
 		|| this->fieldName.compare(0, 7, "_Myhead") == 0;
 }
 
-struct FieldContext
-{
-	std::vector<LightField>* fields;
-	ULONG inTypeId;
-	ULONG64 module;
-	ULONG outFieldCount;
-};
-
-ULONG WDBGAPI fieldCallBack(FIELD_INFO* pField, PVOID UserContext)
-{
-	// pField->TypeId is a SymTagData, the symbol carrying the name of the field.
-	// The symbol of the type of pField is not directly here in pField. We can have it by 
-	// SymGetTypeInfo(pField->TypeId, TI_GET_TYPE).
-
-	// This method is not called back for fields coming from virtual derivations.
-
-	FieldContext* context = (FieldContext*)UserContext;
-
-	if (context->inTypeId == pField->TypeId)
-	{
-		return 0; // can happen when get_type_info is called with a field typeId,
-				  // just skip this repeated field
-	}
-
-	context->fields->resize(context->fields->size() + 1);
-	LightField& outField = context->fields->back();
-	strcpy_s(outField.fName, 128, (char*)pField->fName);
-	outField.size = pField->size;
-	outField.TypeId = pField->TypeId;
-	outField.address = pField->address;
-	//outField.FieldOffset = pField->FieldOffset; // 0, 1, 2, ... looks not filled
-	outField.fPointer = (bool)pField->fPointer;
-	outField.fArray = (bool)pField->fArray;
-	outField.fStruct = (bool)pField->fStruct;
-	//outField.fConstant = pField->fConstant;
-	outField.fStatic = pField->fStatic;
-	context->fields->back().module = context->module;
-	context->outFieldCount++;
-	return 0;
-}
+//struct FieldContext
+//{
+//	std::vector<Field>* fields;
+//	ULONG inTypeId;
+//	ULONG64 module;
+//	ULONG outFieldCount;
+//};
+//
+//ULONG WDBGAPI fieldCallBack(FIELD_INFO* pField, PVOID UserContext)
+//{
+//	// pField->TypeId is a SymTagData, the symbol carrying the name of the field.
+//	// The symbol of the type of pField is not directly here in pField. We can have it by 
+//	// SymGetTypeInfo(pField->TypeId, TI_GET_TYPE).
+//
+//	// This method is not called back for fields coming from virtual derivations.
+//
+//	FieldContext* context = (FieldContext*)UserContext;
+//
+//	if (context->inTypeId == pField->TypeId)
+//	{
+//		return 0; // can happen when get_type_info is called with a field typeId,
+//				  // just skip this repeated field
+//	}
+//
+//	context->fields->resize(context->fields->size() + 1);
+//	Field& outField = context->fields->back();
+//	strcpy_s(outField.fName, 128, (char*)pField->fName);
+//	outField.size = pField->size;
+//	outField.TypeId = pField->TypeId;
+//	outField.address = pField->address;
+//	//outField.FieldOffset = pField->FieldOffset; // 0, 1, 2, ... looks not filled
+//	outField.fPointer = (bool)pField->fPointer;
+//	outField.fArray = (bool)pField->fArray;
+//	outField.fStruct = (bool)pField->fStruct;
+//	//outField.fConstant = pField->fConstant;
+//	outField.fStatic = pField->fStatic;
+//	context->fields->back().module = context->module;
+//	context->outFieldCount++;
+//	return 0;
+//}
 
 void sym_get_type_info(ULONG64 Module,
 						ULONG TypeId,
-						/*out*/ std::vector<LightField>& fields)
+						/*out*/ std::vector<Field>& fields,
+						ULONG offset)
 {
 	fields.clear();
-
 	ULONG64 hProcess = 0;
 	g_ExtSystem->GetCurrentProcessHandle(/*out*/&hProcess);
 	DWORD childrenCount = 0;
-	BOOL b = SymGetTypeInfo((HANDLE)hProcess, Module, TypeId, TI_GET_CHILDRENCOUNT, &childrenCount); // fields and methods of TypeId
+
+	DWORD symtag = 0;
+	BOOL b = SymGetTypeInfo((HANDLE)hProcess, Module, TypeId, TI_GET_SYMTAG, /*out*/&symtag);
+	if (symtag == 14)
+	{
+		// Pointer types like Foo* have no children, replace them by their pointed type.
+		b = SymGetTypeInfo((HANDLE)hProcess, Module, TypeId, TI_GET_TYPE, /*out*/&TypeId);
+	}
+
+	// Fields and methods of TypeId. 
+	b = SymGetTypeInfo((HANDLE)hProcess, Module, TypeId, TI_GET_CHILDRENCOUNT, &childrenCount);
 	if (!b)
 	{
 		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "Failed to get children of type %d\n", TypeId);
@@ -208,25 +216,38 @@ void sym_get_type_info(ULONG64 Module,
 	WCHAR* symName = 0;
 	for (int i = 2; i < ids.size(); i++)
 	{
-		DWORD symtag = 0;
 		b = SymGetTypeInfo((HANDLE)hProcess, Module, ids[i], TI_GET_SYMTAG, /*out*/&symtag);
 
-		DWORD addr = 0, virtualAddr = 0;
-		//b = SymGetTypeInfo((HANDLE)hProcess, Module, ids[i], TI_GET_VIRTUALBASEPOINTEROFFSET, /*out*/&virtualAddr);
+		DWORD addr = 0;
 
-		if ((symtag == 18 // base class
+		if (symtag == 18 // base class
 			|| symtag == 7) // data
-			&& SymGetTypeInfo((HANDLE)hProcess, Module, ids[i], TI_GET_OFFSET, /*out*/&addr)) // Skip static fields. Optim : only query addr when the symtag is correct.
 		{
+			const bool addressFound = SymGetTypeInfo((HANDLE)hProcess, Module, ids[i], TI_GET_OFFSET, /*out*/&addr);
+			ULONG virtualSuperClassIndex = -1;
 			if (symtag == 7)
 			{
 				// Find which kind of data this field is
+				if (!addressFound)
+					continue; // skip static fields
 				ULONG fieldType = 0;
 				SymGetTypeInfo((HANDLE)hProcess, Module, ids[i], TI_GET_TYPE, /*out*/&fieldType);
 				SymGetTypeInfo((HANDLE)hProcess, Module, fieldType, TI_GET_SYMTAG, /*out*/&symtag);
 			}
+			else if (symtag == 18)
+			{
+				if (addressFound) // Recursively fill the super class's fields
+				{
+					SymGetTypeInfo((HANDLE)hProcess, Module, ids[i], TI_GET_TYPE, /*out*/&TypeId);
+					sym_get_type_info(Module, TypeId, /*out*/ fields, addr);
+					continue;
+				}
+				else // Display the virtual super class as a struct field, so that TypedValueTree::Print resolves the vbtable
+					b = SymGetTypeInfo((HANDLE)hProcess, Module, ids[i], TI_GET_VIRTUALBASEDISPINDEX, /*out*/&virtualSuperClassIndex);
+
+			}
 			fields.resize(fields.size() + 1);
-			LightField& field = fields.back();
+			Field& field = fields.back();
 			if (SymGetTypeInfo((HANDLE)hProcess, Module, ids[i], TI_GET_SYMNAME, /*out*/&symName))
 			{
 				std::wcstombs(/*out*/field.fName, symName, 128);
@@ -236,6 +257,7 @@ void sym_get_type_info(ULONG64 Module,
 			field.TypeId = ids[i];
 			field.address = addr;
 			field.module = Module;
+			field.virtualSuperClassIndex = virtualSuperClassIndex;
 
 			switch (symtag)
 			{
@@ -254,7 +276,7 @@ void sym_get_type_info(ULONG64 Module,
 	}
 }
 
-HRESULT TypedValueTree::GetField(unsigned long fieldOffset,	/*out*/LightField& fieldDesc) const
+HRESULT TypedValueTree::GetField(unsigned long fieldOffset,	/*out*/Field& fieldDesc) const
 {
 	if (!this->typeId)
 	{
@@ -390,7 +412,7 @@ std::string print_basic_value(	ULONG64 addr,
 	return res;
 }
 
-WatchLine print_field(const LightField& field,
+WatchLine print_field(const Field& field,
 						 ULONG64 Module,
 						 ULONG64 addr,
 						 long indent)
@@ -442,49 +464,12 @@ WatchLine print_field(const LightField& field,
 	{
 		// basic types
 		res.value = print_basic_value(addr + field.address, field.TypeId, Module, fieldType, field.size);
-		//{
-			//else if (field.TypeId)
-			//	g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "%s\n", fieldType); // struct fields, just print their names
-			//else
-			//{
-			//	// without TypeId it's not a true field, but a pointer expansion
-			//	char pwCmd[256];
-			//	sprintf_s(pwCmd, 256, "?? *(%s)0x%p", fieldType, addr);
-			//	g_ExtControl->Execute(DEBUG_OUTCTL_ALL_CLIENTS |
-			//							DEBUG_OUTCTL_OVERRIDE_MASK |
-			//							DEBUG_OUTCTL_NOT_LOGGED,
-			//							pwCmd,
-			//							DEBUG_EXECUTE_DEFAULT );
-			//}
-		//}
 	}
 
 	res.type = fieldType;
 	if (strncmp(fieldType, "char*", 5) == 0)
 		res.cStrAddr = fieldData;
 	return res;
-}
-
-HRESULT print_managed_value(ULONG64 addr, const char* type)
-{
-	ULONG64 fieldAddress = 0;
-	if (strcmp(type, "System.Int32") == 0)
-	{
-		ReadMemory(addr , // +4
-				   &fieldAddress, 4, 0);
-		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "0n%d\n", fieldAddress);
-		return S_OK;
-	}
-	else if (strcmp(type, "System.Double") == 0)
-	{
-		fieldAddress = 0;
-		ReadMemory(addr , // +4
-				   &fieldAddress, 8, 0);
-		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "%f\n", fieldAddress);
-		return S_OK;
-	}
-
-	return E_FAIL;
 }
 
 void TypedValueTree::FillFields()
@@ -494,45 +479,46 @@ void TypedValueTree::FillFields()
 	if (fArray || !this->module)
 		return;
 
-	//sym_get_type_info(this->module, this->typeId, /*out*/this->fields);
-	//this->fieldCount = this->fields.size();
-	//return;
+	sym_get_type_info(this->module, this->typeId, /*out*/this->fields, 0);
+	this->fieldCount = this->fields.size();
+	return;
 
 	// Auto-dereferences pointer types, but not virtual inheritance.
+	// Doesn't handle virtual fields.
 	// g_ExtSymbols->OutputTypedDataVirtual is too slow, because it resolves virtual inheritance for all base classes.
 
-	FieldContext context;
-	context.outFieldCount = 0;
-	context.fields = &this->fields;
-	context.module = this->module;
+	//FieldContext context;
+	//context.outFieldCount = 0;
+	//context.fields = &this->fields;
+	//context.module = this->module;
 
-	static SYM_DUMP_PARAM typeInfo =
-	{
-		sizeof(SYM_DUMP_PARAM), // .size =
-		0, // sName
-		DBG_DUMP_CALL_FOR_EACH | DBG_DUMP_NO_PRINT, // .Options =
-		0, // .addr = null address, means print type info only, without reference to base classes
-		NULL, // .listLink = 
-		0, // .pBuffer =  context or buffer
-		fieldCallBack, // .CallbackRoutine = function called on each field
-		0, //.nFields =
-		NULL //.Fields = means get all fields
-	};
+	//static SYM_DUMP_PARAM typeInfo =
+	//{
+	//	sizeof(SYM_DUMP_PARAM), // .size =
+	//	0, // sName
+	//	DBG_DUMP_CALL_FOR_EACH | DBG_DUMP_NO_PRINT, // .Options =
+	//	0, // .addr = null address, means print type info only, without reference to base classes
+	//	NULL, // .listLink = 
+	//	0, // .pBuffer =  context or buffer
+	//	fieldCallBack, // .CallbackRoutine = function called on each field
+	//	0, //.nFields =
+	//	NULL //.Fields = means get all fields
+	//};
 
-	// Seems typeName is stronger than TypeId in IG_DUMP_SYMBOL_INFO : 
-	// if it is given it will not use TypeId
-	typeInfo.sName = 0;
-	typeInfo.ModBase = this->module;
-	typeInfo.TypeId = this->typeId;
-	context.inTypeId = typeInfo.TypeId;
-	typeInfo.fPointer = 0;
-	typeInfo.fStruct = 0;
-	typeInfo.Context = (void*)&context;
+	//// Seems typeName is stronger than TypeId in IG_DUMP_SYMBOL_INFO : 
+	//// if it is given it will not use TypeId
+	//typeInfo.sName = 0;
+	//typeInfo.ModBase = this->module;
+	//typeInfo.TypeId = this->typeId;
+	//context.inTypeId = typeInfo.TypeId;
+	//typeInfo.fPointer = 0;
+	//typeInfo.fStruct = 0;
+	//typeInfo.Context = (void*)&context;
 
-	// Through dbgeng.dll, will make dozens of calls to dbghelp.dll!SymGetTypeInfo
-	ULONG res = Ioctl(IG_DUMP_SYMBOL_INFO, /*out*/&typeInfo, typeInfo.size);
+	//// Through dbgeng.dll, will make dozens of calls to dbghelp.dll!SymGetTypeInfo
+	//ULONG res = Ioctl(IG_DUMP_SYMBOL_INFO, /*out*/&typeInfo, typeInfo.size);
 
-	this->fieldCount = fields.size();
+	//this->fieldCount = fields.size();
 	// for watches on references, typeId will be undefined and previous call will fail
 }
 
@@ -553,7 +539,7 @@ void TypedValueTree::CopyTypeInfo(const TypedValueTree& other)
 ULONG64 expand_string(const TypedValueTree* w)
 {
 	// Return the address of the underlying char*. Only works when the union _Bx is interpreted as such a char* (strings longer than 4 characters ?).
-	const LightField& bx = w->FindField("_Bx");
+	const Field& bx = w->FindField("_Bx");
 	if (!bx.TypeId)
 	{
 		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "_Bx not found\n");
@@ -612,8 +598,7 @@ std::string TypedValueTree::GetDeepType(unsigned __int64 addr) const
 char TypedValueTree::GetExpandCharacter() const
 {
 	const bool canBeExpanded =
-		((this->fPointer || this->fArray || this->dynamicDereference)
-			&& this->starCount > this->dereferences)
+		((this->fPointer || this->fArray) && this->starCount > this->dereferences)
 		|| this->fStruct
 		|| (fieldCount > 0 && this->starCount == this->dereferences);
 	if (canBeExpanded)
@@ -634,11 +619,9 @@ void TypedValueTree::Print(long indent, std::vector<WatchLine>& output)
 
 	// Print root value
 	const ULONG64 addr = GetAddressOfData();
-	if (this->typeId && this->module
-	    && (this->address || this->dynamicDereference))
+	if (this->typeId && this->module && this->address)
 	{			
-		if ((this->fPointer || this->fArray || this->dynamicDereference)
-			&& this->starCount > this->dereferences)
+		if ((this->fPointer || this->fArray) && this->starCount > this->dereferences)
 		{
 			// Print the pointed memory address
 			std::stringstream ss;
@@ -691,7 +674,18 @@ void TypedValueTree::Print(long indent, std::vector<WatchLine>& output)
 				if (child != this->children.end())
 				{
 					// addr may have been modified because this watch is a pointer, or higher up in the call stack
-					child->address = addr + fields[i].address;
+					if (fields[i].virtualSuperClassIndex == -1)
+						child->address = addr + fields[i].address;
+					else
+					{
+						ULONG64 vbtableAddr = 0; // write 64 bits
+						ULONG cb;
+						const int ptrSize = sizeof(long*);
+						ReadMemory(this->address, /*out*/&vbtableAddr, ptrSize, &cb);
+						child->address = 0;
+						ReadMemory(vbtableAddr + 4*fields[i].virtualSuperClassIndex, /*out*/&child->address, 4, &cb);
+						child->address += addr;
+					}
 					child->Print(indent + 2, output);
 					notYetPrintedChild = child+1;
 				}
@@ -711,17 +705,12 @@ void TypedValueTree::Print(long indent, std::vector<WatchLine>& output)
 ULONG64 TypedValueTree::GetAddressOfData() const
 {
 	ULONG64 addr = this->address;
-	if (this->starCount > this->dereferences) // dereference pointer
+	if (this->starCount > this->dereferences && this->fPointer) // dereference pointer
 	{
-		if (this->dynamicDereference)
-			addr = this->dynamicDereference;
-		else if (this->fPointer)
-		{
-			addr = 0; // write 64 bits
-			ULONG cb;
-			const int ptrSize = sizeof(long*);
-			ReadMemory(this->address, /*out*/&addr, ptrSize, &cb);
-		}
+		addr = 0; // write 64 bits
+		ULONG cb;
+		const int ptrSize = sizeof(long*);
+		ReadMemory(this->address, /*out*/&addr, ptrSize, &cb);
 	}
 	return addr;
 }
@@ -879,7 +868,6 @@ HRESULT Watch::evaluate()
 		return E_FAIL;
 
 	valTree.address = p.addr;
-	valTree.dynamicDereference = ( (p.fPointer||p.fArray) ? dynDeref : 0); // FIXME : leave 0 for simple pointers with p.addr, as dynDeref is not updated on each Print
 	valTree.fArray = p.fArray;
 	valTree.fPointer = (bool)p.fPointer;
 	valTree.fStruct = p.fStruct;
@@ -939,7 +927,7 @@ HRESULT expand_array(/*out*/TypedValueTree* w)
 
 	EXT_TYPED_DATA ExtData;
 	ZeroMemory(&ExtData, sizeof(ExtData));
-	ULONG64 firstElemAddr = w->dynamicDereference;
+	ULONG64 firstElemAddr = 0; // w->dynamicDereference;
 	ULONG cb;
 	char type[2048];
 	std::string pointType = w->type;
@@ -1024,7 +1012,7 @@ HRESULT expand_iterator(/*out*/TypedValueTree* w, bool myVal)
 	}
 
 	ptr.FillFields();
-	const LightField& myValField = ptr.FindField("_Myval"); 
+	const Field& myValField = ptr.FindField("_Myval"); 
 	if (!myValField.TypeId)
 	{
 		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "_Myval not found\n");
@@ -1052,23 +1040,23 @@ HRESULT expand_iterator(/*out*/TypedValueTree* w, bool myVal)
 	return S_OK;
 }
 
-LightField TypedValueTree::FindField(const char* fieldName) const
+Field TypedValueTree::FindField(const char* fieldName) const
 {
 	const size_t fieldLen = strlen(fieldName);
-	std::vector<LightField>::const_iterator it =
-		std::find_if(this->fields.begin(), this->fields.end(), [&](const LightField& f)
+	std::vector<Field>::const_iterator it =
+		std::find_if(this->fields.begin(), this->fields.end(), [&](const Field& f)
 			{ return strncmp(f.fName, fieldName, fieldLen) == 0; });
-	return it == this->fields.end() ? LightField() : *it;
+	return it == this->fields.end() ? Field() : *it;
 }
 
 void FindVectorFirst(const TypedValueTree& vec, /*out*/TypedValueTree& myFirst)
 {
-	const LightField& myPair = vec.FindField("_Mypair");
+	const Field& myPair = vec.FindField("_Mypair");
 	if (myPair.TypeId)
 	{
 		myFirst.FromField(myPair, vec.GetAddressOfData());
 		myFirst.FillFields();
-		const LightField& myVal2 = myFirst.FindField("_Myval2");
+		const Field& myVal2 = myFirst.FindField("_Myval2");
 		myFirst.FromField(myVal2, myFirst.GetAddressOfData());
 		myFirst.FillFields();
 		myFirst.FromField(myFirst.FindField("_Myfirst"), myFirst.GetAddressOfData());;
@@ -1165,7 +1153,7 @@ HRESULT expand_vector(/*out*/TypedValueTree& w)
 	return S_OK;
 }
 
-void TypedValueTree::FromField(const LightField& field, ULONG64 addr)
+void TypedValueTree::FromField(const Field& field, ULONG64 addr)
 {
 	Prune();
 	this->address = addr + field.address;
@@ -1177,7 +1165,7 @@ void TypedValueTree::FromField(const LightField& field, ULONG64 addr)
 	this->starCount = this->fPointer ? 1 : 0;
 }
 
-LightField FindMapHead(TypedValueTree& map, bool myHead,
+Field FindMapHead(TypedValueTree& map, bool myHead,
 						/*out*/ ULONG64& myHeadAddress)
 {
 	if (myHead)
@@ -1187,7 +1175,7 @@ LightField FindMapHead(TypedValueTree& map, bool myHead,
 	}
 
 	TypedValueTree v;
-	LightField f = map.FindField("_Mypair");
+	Field f = map.FindField("_Mypair");
 	if (f.TypeId)
 	{
 		v.FromField(f, map.GetAddressOfData());
@@ -1214,7 +1202,7 @@ LightField FindMapHead(TypedValueTree& map, bool myHead,
 HRESULT expand_map(/*out*/TypedValueTree& w, bool myHead)
 {
 	ULONG64 myHeadAddress = 0;
-	const LightField& myVal = FindMapHead(w, myHead, /*out*/myHeadAddress);
+	const Field& myVal = FindMapHead(w, myHead, /*out*/myHeadAddress);
 	if (!myVal.TypeId)
 	{
 		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "_Myval not found\n");
@@ -1351,7 +1339,7 @@ ULONG64 listNext(ULONG64 nodeAddr)
 }
 
 // TODO merge with FindVectorFirst
-LightField FindListHead(TypedValueTree& map, bool myHead,
+Field FindListHead(TypedValueTree& map, bool myHead,
 						/*out*/ ULONG64& myHeadAddress)
 {
 	if (myHead)
@@ -1361,7 +1349,7 @@ LightField FindListHead(TypedValueTree& map, bool myHead,
 	}
 
 	TypedValueTree v;
-	LightField f = map.FindField("_Mypair");
+	Field f = map.FindField("_Mypair");
 	if (f.TypeId)
 	{
 		v.FromField(f, map.GetAddressOfData());
@@ -1385,7 +1373,7 @@ LightField FindListHead(TypedValueTree& map, bool myHead,
 HRESULT expand_list(/*out*/TypedValueTree& w, bool myHead)
 {
 	ULONG64 myHeadAddress = 0;
-	const LightField& myVal = FindListHead(w, myHead, /*out*/myHeadAddress);
+	const Field& myVal = FindListHead(w, myHead, /*out*/myHeadAddress);
 	if (!myVal.TypeId)
 	{
 		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "expand_list: _Myval not found\n");
@@ -1529,7 +1517,7 @@ TypedValueTree* TypedValueTree::NewSubWatch(long offset)
 	w->expanded = false;
 	w->offset = offset;
 
-	LightField fieldDesc;
+	Field fieldDesc;
 	if (GetField(w->offset, /*out*/fieldDesc) != S_OK)
 		return 0;
 	
