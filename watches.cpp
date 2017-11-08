@@ -194,6 +194,12 @@ void sym_get_type_info(ULONG64 Module,
 
 	DWORD symtag = 0;
 	BOOL b = SymGetTypeInfo((HANDLE)hProcess, Module, TypeId, TI_GET_SYMTAG, /*out*/&symtag);
+	if (symtag == 7)
+	{
+		// Convert a data symbol to its type.
+		b = SymGetTypeInfo((HANDLE)hProcess, Module, TypeId, TI_GET_TYPE, /*out*/&TypeId);
+		b = SymGetTypeInfo((HANDLE)hProcess, Module, TypeId, TI_GET_SYMTAG, /*out*/&symtag);
+	}
 	if (symtag == 14)
 	{
 		// Pointer types like Foo* have no children, replace them by their pointed type.
@@ -634,7 +640,7 @@ void TypedValueTree::Print(long indent, std::vector<WatchLine>& output)
 	}
 
 	// Print type (or string value) and end of line
-	if (this->type.compare(0, 18, "std::basic_string<") == 0)
+	if (this->type.compare(0, 18, "std::basic_string<") == 0 && this->starCount <= 1)
 		output.back().cStrAddr = expand_string(this);
 	if (this->type == "char[]" || this->type == "char*")
 		output.back().cStrAddr = addr;
@@ -1473,19 +1479,26 @@ void TypedValueTree::FillFieldsAndChildren()
 	else if (this->starCount - this->dereferences >= 2)
 	{
 		// double-pointer expand
-		// TRY SymGetTypeInfo BASE TYPE
-
-		if (children.empty())
-			insert_subwatch(std::move(*new TypedValueTree()), *this);
+		children.resize(1);
 		TypedValueTree* sub = &this->children[0];
 		sub->Prune();
+		sub->parent = this;
 		sub->fieldName = "[0]";
 		sub->offset = 0;
-		sub->type = this->type;
 		sub->fPointer = true;
 		sub->fStruct = false;
 		sub->expanded = (this->starCount - this->dereferences == 2);
+		sub->starCount = this->starCount - 1;
+		sub->dereferences = this->dereferences;
+		sub->module = this->module;
+
+		ULONG64 hProcess = 0;
+		g_ExtSystem->GetCurrentProcessHandle(/*out*/&hProcess);
+		DWORD childrenCount = 0;
+		BOOL b = SymGetTypeInfo((HANDLE)hProcess, this->module, this->typeId, TI_GET_TYPE, /*out*/&sub->typeId);
+
 		// cut one star
+		sub->type = this->type;
 		for (size_t i = sub->type.length() - 1; i >= 0; i--)
 		{
 			if (sub->type[i] == '*')
@@ -1495,17 +1508,11 @@ void TypedValueTree::FillFieldsAndChildren()
 			}
 		}
 		
-		sub->starCount = this->starCount;
-		sub->dereferences = this->dereferences + 1;
-		sub->typeId = this->typeId;
-		sub->module = this->module;
-
 		ULONG cb;
 		sub->address = 0;
 		const int ptrSize = sizeof(long*);
-		ReadMemory(this->address, &sub->address, ptrSize, &cb);
-
-		sub->FillFields(); // same fields as the parent, could use them instead
+		ReadMemory(this->address, /*out*/&sub->address, ptrSize, &cb);
+		sub->FillFields();
 	}
 }
 

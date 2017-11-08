@@ -77,14 +77,14 @@ public:
 	ULONG typeId {};
 	std::string type; // can be long types like complex maps
 	bool fPointer {}, fStruct {}, fArray {};
-	unsigned long starCount {}; // workaround because dbgeng cannot lookup pointer types by string
+	unsigned long starCount {}; // special treatment for double pointers
 
 	// IG_DUMP_SYMBOL_INFO on a pointer of any order, like Foo****, will give fields of Foo correctly.
 	// Only need to track the number of dereferences
 	unsigned long dereferences{};
 	bool expanded = true;
 
-	unsigned __int64 address{};
+	unsigned __int64 address{}; // for a pointer int* x, address is &x, not x.
 
 	// fields compete with children below. fields are native C++ fields, whereas children are subwatches,
 	// created when clicking on the expand signs, or by transforming types such as std containers.
