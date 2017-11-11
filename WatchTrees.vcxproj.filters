@@ -27,12 +27,18 @@
     <ClCompile Include="globals.cpp">
       <Filter>Source files</Filter>
     </ClCompile>
+    <ClCompile Include="ManagedCommands.cpp">
+      <Filter>Source files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="watches.h">
       <Filter>Header files</Filter>
     </ClInclude>
     <ClInclude Include="globals.h">
+      <Filter>Header files</Filter>
+    </ClInclude>
+    <ClInclude Include="CLRInterfaces.h">
       <Filter>Header files</Filter>
     </ClInclude>
   </ItemGroup>

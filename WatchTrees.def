@@ -13,3 +13,4 @@ EXPORTS
     clear_watch
 	evaluate_tooltip
     DebugExtensionInitialize
+	mkpn

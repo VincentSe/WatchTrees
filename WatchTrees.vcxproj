@@ -40,7 +40,7 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v120</PlatformToolset>
+    <PlatformToolset>v141</PlatformToolset>
     <CharacterSet>
     </CharacterSet>
   </PropertyGroup>
@@ -132,11 +132,13 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="globals.cpp" />
+    <ClCompile Include="ManagedCommands.cpp" />
     <ClCompile Include="tooltips.cpp" />
     <ClCompile Include="WatchCommands.cpp" />
     <ClCompile Include="watches.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="CLRInterfaces.h" />
     <ClInclude Include="globals.h" />
     <ClInclude Include="watches.h" />
   </ItemGroup>
