@@ -255,6 +255,21 @@ struct IXCLRDisassemblySupport;
 struct IXCLRDataAppDomain;
 struct IXCLRDataExceptionNotification;
 
+struct DacpReJitData //: ZeroInit<DacpReJitData>
+{
+	enum Flags
+	{
+		kUnknown,
+		kRequested,
+		kActive,
+		kReverted,
+	};
+
+	CLRDATA_ADDRESS                 rejitID;
+	Flags                           flags;
+	CLRDATA_ADDRESS                 NativeCodeAddr;
+};
+
 typedef SIZE_T(__stdcall *CDSTranslateAddrCB)(
 	IXCLRDisassemblySupport *__MIDL____MIDL_itf_xclrdata_0000_00020000,
 	CLRDATA_ADDRESS __MIDL____MIDL_itf_xclrdata_0000_00020001,
@@ -2323,4 +2338,48 @@ public:
 		unsigned int count,
 		WCHAR *name,
 		unsigned int *pNeeded) = 0;
+};
+
+struct DacpMethodDescData //: ZeroInit<DacpMethodDescData>
+{
+	BOOL            bHasNativeCode;
+	BOOL            bIsDynamic;
+	WORD            wSlotNumber;
+	CLRDATA_ADDRESS NativeCodeAddr;
+	// Useful for breaking when a method is jitted.
+	CLRDATA_ADDRESS AddressOfNativeCodeSlot;
+
+	CLRDATA_ADDRESS MethodDescPtr;
+	CLRDATA_ADDRESS MethodTablePtr;
+	CLRDATA_ADDRESS ModulePtr;
+
+	mdToken                  MDToken;
+	CLRDATA_ADDRESS GCInfo;
+	CLRDATA_ADDRESS GCStressCodeCopy;
+
+	// This is only valid if bIsDynamic is true
+	CLRDATA_ADDRESS managedDynamicMethodObject;
+
+	CLRDATA_ADDRESS requestedIP;
+
+	// Gives info for the single currently active version of a method
+	DacpReJitData       rejitDataCurrent;
+
+	// Gives info corresponding to requestedIP (for !ip2md)
+	DacpReJitData       rejitDataRequested;
+
+	// Total number of rejit versions that have been jitted
+	ULONG               cJittedRejitVersions;
+
+	HRESULT Request(ISOSDacInterface *sos, CLRDATA_ADDRESS addr)
+	{
+		return sos->GetMethodDescData(
+			addr,
+			NULL,   // IP address
+			this,
+			0,      // cRejitData
+			NULL,   // rejitData[]
+			NULL    // pcNeededRejitData
+		);
+	}
 };

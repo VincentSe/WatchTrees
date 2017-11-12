@@ -6,7 +6,9 @@ Copyright (c) 2017  Vincent Semeria
 
 
 /**
-	Stepping and breakpoint commands for managed (.NET) code. 
+	Stepping and breakpoint commands for managed (.NET) code.
+
+	They are missing from SOS.dll : managed steps in the source code, evaluate a managed variable name.
 */
 
 // C:\Windows\Microsoft.NET\Framework64\v4.0.30319\sos.dll and clr.dll
@@ -710,6 +712,173 @@ mbl(PDEBUG_CLIENT4 Client, PCSTR args)
 		dprintf("failed symbols3\n");
 
 	list_managed_breakpoints(symbols3);
+
+	symbols3->Release();
+	return S_OK;
+}
+
+/**
+	Step one line of source code (native or managed).
+*/
+HRESULT CALLBACK
+mp(PDEBUG_CLIENT4 Client, PCSTR args)
+{
+	NativeDbgEngAPIManager dbgApi(Client);
+	if (!dbgApi.initialized) return E_FAIL;
+
+	bool stepInto = (*args == 't');
+
+	IDebugSymbols3* symbols3;
+	if (Client->QueryInterface(__uuidof(IDebugSymbols3), (void **)&symbols3) != S_OK)
+		dprintf("failed symbols3\n");
+
+	init_clr_interfaces();
+	IXCLRDataProcess* iClr = GetIClr();
+	ISOSDacInterface* iClr3 = GetIClr3();
+
+	//if (stepInto)
+	//{
+	//	// The method we want to step into may not have been jitted yet : stepping in native code would enter the JIT compiler.
+	//	// Parse MSIL to get the address of the function stepped into and set a temporary breakpoint there.
+
+	//	DEBUG_STACK_FRAME frame;
+	//	g_ExtControl->GetStackTrace(0, 0, 0, &frame, 1, 0);
+	//	ULONG64 ilAddr;
+	//	WCHAR mngFuncName[1024];
+	//	ip2il(frame.InstructionOffset, /*out*/&ilAddr, /*out*/mngFuncName,
+	//		iClr,
+	//		symbols3);
+
+	//	CLRDATA_ENUM hdl = 0;
+	//	IXCLRDataMethodInstance* meth = 0;
+	//	if (iClr->StartEnumMethodInstancesByAddress(frame.InstructionOffset, 0, &hdl) != S_OK)
+	//	{
+	//		//dprintf("start enum method failed\n");
+	//		return E_FAIL;
+	//	}
+	//	iClr->EnumMethodInstanceByAddress(&hdl, &meth);
+	//	iClr->EndEnumMethodInstancesByAddress(hdl);
+
+	//	ULONG32 tokenToCall;
+	//	ULONG64 moduleToCall;
+	//	if (parse_call_instruction(meth, frame.InstructionOffset, &tokenToCall, &moduleToCall) == S_OK)
+	//	{
+	//		CLRDATA_ADDRESS methodToCall;
+	//		DacpMethodDescData methDescData;
+	//		iClr3->GetMethodDescFromToken(moduleToCall, tokenToCall, &methodToCall);
+	//		iClr3->GetMethodDescData(methodToCall, 0, /*out*/&methDescData,
+	//			0, 0, 0);
+	//		if (!methDescData.bHasNativeCode)
+	//		{
+	//			IXCLRDataModule* module = 0;
+	//			iClr3->GetModule(moduleToCall, &module);
+	//			IXCLRDataMethodDefinition* clrMethod = 0;
+	//			module->GetMethodDefinitionByToken(tokenToCall, &clrMethod);
+	//			iClr3->GetMethodDescName(methodToCall, 1024, /*out*/mngFuncName, 0);
+
+	//			// CLRDATA_ENUM hdl = 0;
+
+	//			// module->lpVtbl->StartEnumMethodDefinitionsByName(module, mngFuncName, 0, &hdl);
+	//			// module->lpVtbl->EnumMethodDefinitionByName(module, &hdl, &clrMethod);
+	//			clrMethod->SetCodeNotification(true); // tell the JIT compiler to throw an exception of type clrn when it does this method
+	//			clrMethod->Release();
+	//			// module->lpVtbl->EndEnumMethodDefinitionsByName(module, hdl);
+
+
+	//			// module->lpVtbl->StartEnumExtents(module, &hdl);
+	//			// ULONG outBuf[8];
+	//			// module->lpVtbl->EnumExtent(module, &hdl, outBuf);
+	//			// module->lpVtbl->EndEnumExtents(module, hdl);
+	//			// ULONG64 moduleBaseAddress = *(ULONG64*)outBuf;
+
+	//			// DEBUG_MODULE_AND_ID methSymbolId;
+	//			// if (symbols3->GetSymbolEntryByToken(moduleBaseAddress,
+	//			// 									tokenToCall,
+	//			// 									&methSymbolId) != S_OK)
+	//			// {
+	//			// 	// PDB is not there or could not be associated with the executing code
+	//			// 	//dprintf("symb entry by token failed\n");
+	//			// 	module->lpVtbl->Release(module);
+	//			// 	return S_OK;
+	//			// }
+	//			// DEBUG_SYMBOL_ENTRY methSymbol;
+	//			// if (symbols3->GetSymbolEntryInformation(&methSymbolId, /*out*/ &methSymbol) != S_OK)
+	//			// 	dprintf("symb entry failed\n");
+
+
+	//			char funcNameBis[256];
+	//			wcstombs(funcNameBis, mngFuncName, 256);
+	//			// ULONG line;
+	//			// char file[1024];
+	//			// g_ExtSymbols->GetLineByOffset(methSymbol.Offset, &line, file, 1024, 0, 0);
+	//			gPendingBreakpointList.Add(new ManagedBreakpoint(0, 0, funcNameBis, 0));
+	//			//list_managed_breakpoints(symbols3);
+	//			//g_ExtControl->OutputPrompt(DEBUG_OUTCTL_THIS_CLIENT, 0);
+	//			stepInto = false; // trigger the breakpoint by requesting a step over it
+	//			module->Release();
+	//		}
+	//	}
+	//	meth->Release();
+	//}
+
+	DEBUG_STACK_FRAME frame;
+	g_ExtControl->GetStackTrace(0, 0, 0, &frame, 1, 0);
+	char initFunction[1024];
+	char function[1024];
+	bool managed;
+	ULONG initLine, line;
+	WhereIs(frame.InstructionOffset, 0, &initLine, /*out*/initFunction, &managed, iClr, symbols3);
+
+	if (managed)
+	{
+		// The source code is not always executed vertically : end of loops, return of functions, ...
+		// We must step in assembler and query the source code until the line changes.
+		line = initLine;
+		ULONG stepCount = 0;
+		ip2ilContext context(frame.InstructionOffset, iClr, symbols3);
+		while ((line == initLine
+			|| (!line && !*function)
+			|| (!line && strcmp(function, initFunction) == 0))
+			&& stepCount < 60) // against infinite loops
+		{
+			g_ExtControl->Execute(DEBUG_OUTCTL_IGNORE |
+				DEBUG_OUTCTL_NOT_LOGGED,
+				stepInto ? "t" : "p",
+				DEBUG_EXECUTE_DEFAULT);
+
+			// wait for the step to finish
+			ULONG ulStatus = 0;
+			do
+			{
+				g_ExtControl->WaitForEvent(DEBUG_WAIT_DEFAULT, INFINITE);
+				g_ExtControl->GetExecutionStatus(&ulStatus);
+				//dprintf("Wait currStat 0x%x, step count %d\n0:000>\n", ulStatus, stepCount);
+			} while (ulStatus != DEBUG_STATUS_BREAK && ulStatus != DEBUG_STATUS_NO_DEBUGGEE);
+
+			g_ExtControl->GetStackTrace(0, 0, 0, &frame, 1, 0);
+			ULONG32 ilOffset = 0;
+			context.meth->GetILOffsetsByAddress(frame.InstructionOffset, 1, 0, &ilOffset); // != S_OK) // careful to offsets 0xfffffffd and the like
+			g_ExtSymbols->GetLineByOffset(context.methAddress + ilOffset, &line, 0, 0, 0, 0);
+			stepCount++;
+		}
+
+		char file[1024];
+		WhereIs(frame.InstructionOffset, file, &line, function, &managed, iClr, symbols3);
+
+		dprintf("%s(%d)+0\n(0) %s\n", file, line, function);
+	}
+	else
+	{
+		g_ExtControl->Execute(DEBUG_OUTCTL_IGNORE |
+			DEBUG_OUTCTL_NOT_LOGGED,
+			stepInto ? "t" : "p",
+			DEBUG_EXECUTE_DEFAULT);
+		g_ExtControl->Execute(DEBUG_OUTCTL_ALL_CLIENTS |
+			DEBUG_OUTCTL_OVERRIDE_MASK |
+			DEBUG_OUTCTL_NOT_LOGGED,
+			"ln eip",
+			DEBUG_EXECUTE_DEFAULT);
+	}
 
 	symbols3->Release();
 	return S_OK;
