@@ -15,3 +15,5 @@ EXPORTS
     DebugExtensionInitialize
 	mkpn
 	mframe
+	mbp
+	mbl

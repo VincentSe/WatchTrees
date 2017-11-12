@@ -19,9 +19,6 @@ Copyright (c) 2017  Vincent Semeria
 #define KDEXT_64BIT 
 #include "wdbgexts.h"
 
-GUID IID_IXCLRDataProcess = { 0x5c552ab6, 0xfc09, 0x4cb3,{ 0x8e, 0x36, 0x22, 0xfa, 0x03, 0xc7, 0x98, 0xb7 } };
-
-
 IXCLRDataProcess*& GetIClr()
 {
 	static IXCLRDataProcess* iClr = 0;
@@ -44,7 +41,7 @@ void init_clr_interfaces()
 	ULONG res;
 	if (!iClr)
 	{
-		ixDataQuery.Iid = &IID_IXCLRDataProcess;
+		ixDataQuery.Iid = &__uuidof(IXCLRDataProcess);
 		res = Ioctl(IG_GET_CLR_DATA_INTERFACE, &ixDataQuery, sizeof(ixDataQuery));
 		iClr = res ? (IXCLRDataProcess*)ixDataQuery.Iface : 0;
 	}
@@ -287,22 +284,20 @@ HRESULT sourceCode2ip(const char* moduleName,
 	return S_OK;
 }
 
+/**
+	Add a native or managed breakpoint.
+*/
 HRESULT CALLBACK
 mbp(PDEBUG_CLIENT4 Client, PCSTR args)
 {
 	NativeDbgEngAPIManager dbgApi(Client);
 	if (!dbgApi.initialized) return E_FAIL;
-	reset_clr_interfaces();
-	IXCLRDataProcess* iClr = GetIClr();
-	ISOSDacInterface* iClr3 = GetIClr3();
-	DacpUsefulGlobalsData usefulGlobals;
-	iClr3->GetUsefulGlobals(&usefulGlobals);
-
-
+	
 	char* tok = strtok((char*)args, " ");
 	if (!tok)
 	{
-		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "usage !mbp module file function line\n");
+		// For example : !mbp testCSharp Program.cs Program.Main 14
+		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "usage !mbp module file class.function line\n");
 		return E_FAIL;
 	}
 
@@ -326,6 +321,11 @@ mbp(PDEBUG_CLIENT4 Client, PCSTR args)
 	}
 	sscanf(tok, "%d", &line);
 
+	reset_clr_interfaces();
+	IXCLRDataProcess* iClr = GetIClr();
+	ISOSDacInterface* iClr3 = GetIClr3();
+	DacpUsefulGlobalsData usefulGlobals;
+	iClr3->GetUsefulGlobals(&usefulGlobals);
 
 	bool managed;
 	ULONG64 ip = 0;
@@ -623,6 +623,93 @@ mkpn(PDEBUG_CLIENT4 Client, PCSTR args)
 				| DEBUG_STACK_FRAME_NUMBERS
 				| DEBUG_STACK_PARAMETERS); // params are not given by WhereIs
 	}
+
+	symbols3->Release();
+	return S_OK;
+}
+
+HRESULT list_managed_breakpoints(IDebugSymbols3* symbols3)
+{
+	IXCLRDataProcess* iClr = GetIClr();
+
+	ULONG bpCount = 0;
+	g_ExtControl->GetNumberBreakpoints(&bpCount);
+	char file[256];
+	char function[512];
+	char functionBis[256];
+	ULONG bpId;
+	ULONG64 bpAddr;
+	ULONG bpFlags;
+	char bpCommand[256] = "";
+	ULONG line;
+	bool managed;
+	ULONG maxId = 0;
+	for (ULONG i = 0; i<bpCount; i++)
+	{
+		PDEBUG_BREAKPOINT bp = 0;
+		if (g_ExtControl->GetBreakpointByIndex(i, &bp) != S_OK || !bp)
+			continue;
+		bp->GetOffset(&bpAddr);
+		bp->GetFlags(&bpFlags);
+		bp->GetId(&bpId);
+		if (bpId > maxId)
+			maxId = bpId;
+		bp->GetCommand(bpCommand, 256, 0);
+
+		// bp->GetOffsetExpression(bpLocation, 256, 0) == S_OK) even native breakpoints don't keep their offset expression
+		WhereIs(bpAddr, /*out*/file, /*out*/&line, /*out*/function, /*out*/&managed,
+			iClr, symbols3);
+		if (managed)
+		{
+			wcstombs(functionBis, (WCHAR*)function, 256);
+			strtok(functionBis, "("); // don't print args
+		}
+		dprintf(" %d %c %p [%s @ %d] ",
+			bpId,
+			bpFlags&DEBUG_BREAKPOINT_ENABLED ? 'e' : 'd',
+			bpAddr,
+			file, line);
+		if (managed)
+			dprintf("XXX!%s", functionBis);
+		else
+			dprintf("%s", function);
+		if (*bpCommand)
+			dprintf(" \"%s\"", bpCommand);
+		dprintf("\n");
+	}
+
+	maxId++;
+	ManagedBreakpoint* bp = gPendingBreakpointList.child;
+	while (bp)
+	{
+		bp->requestedId = maxId;
+		dprintf(" %d %c %p ",
+			maxId,
+			'e',
+			0);
+		dprintf("[%s @ %d] XXX!", bp->file, bp->line);
+		strncpy(function, bp->function, 512);
+		strtok(function, "("); // don't print args
+		dprintf("%s\n", function);
+		bp = bp->child;
+		maxId++;
+	}
+
+	return S_OK;
+}
+
+HRESULT CALLBACK
+mbl(PDEBUG_CLIENT4 Client, PCSTR args)
+{
+	NativeDbgEngAPIManager dbgApi(Client);
+	if (!dbgApi.initialized) return E_FAIL;
+
+	init_clr_interfaces();
+	IDebugSymbols3* symbols3;
+	if (Client->QueryInterface(__uuidof(IDebugSymbols3), (void **)&symbols3) != S_OK)
+		dprintf("failed symbols3\n");
+
+	list_managed_breakpoints(symbols3);
 
 	symbols3->Release();
 	return S_OK;
