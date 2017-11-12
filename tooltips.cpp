@@ -29,7 +29,9 @@ bool charOfName(char c)
 HRESULT CALLBACK
 evaluate_tooltip(PDEBUG_CLIENT4 Client, PCSTR args)
 {
-	if (InitDebuggerGlobals(Client) != S_OK) return E_FAIL;
+	NativeDbgEngAPIManager dbgApi(Client);
+	if (!dbgApi.initialized) return E_FAIL;
+
 	HRESULT res = S_OK;
 	//init_clr_interfaces();
 
@@ -154,6 +156,5 @@ evaluate_tooltip(PDEBUG_CLIENT4 Client, PCSTR args)
 
 evalTooltipFinish:
 	sysObj->Release();
-	DestroyDebuggerGlobals();
 	return res;
 }

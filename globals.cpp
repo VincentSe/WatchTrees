@@ -19,6 +19,14 @@ PDEBUG_SYMBOLS2       g_ExtSymbols = 0;
 IDebugAdvanced2*	  g_ExtAdvanced = 0;
 IDebugSystemObjects*  g_ExtSystem = 0;
 
+void DestroyDebuggerGlobals()
+{
+	g_ExtControl->Release(); g_ExtControl = 0;
+	g_ExtSymbols->Release(); g_ExtSymbols = 0;
+	g_ExtAdvanced->Release(); g_ExtAdvanced = 0;
+	g_ExtSystem->Release(); g_ExtSystem = 0;
+}
+
 HRESULT InitDebuggerGlobals(PDEBUG_CLIENT4 Client)
 {
 	HRESULT Status;
@@ -51,11 +59,14 @@ Fail:
 	return Status;
 }
 
-void DestroyDebuggerGlobals()
+NativeDbgEngAPIManager::NativeDbgEngAPIManager(PDEBUG_CLIENT4 client)
 {
-	g_ExtControl->Release(); g_ExtControl = 0;
-	g_ExtSymbols->Release(); g_ExtSymbols = 0;
-	g_ExtAdvanced->Release(); g_ExtAdvanced = 0;
+	this->initialized = (S_OK == InitDebuggerGlobals(client));
+}
+
+NativeDbgEngAPIManager::~NativeDbgEngAPIManager()
+{
+	DestroyDebuggerGlobals();
 }
 
 extern "C"

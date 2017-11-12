@@ -542,21 +542,29 @@ void TypedValueTree::CopyTypeInfo(const TypedValueTree& other)
 	this->dereferences = other.dereferences;
 }
 
-ULONG64 expand_string(const TypedValueTree* w)
+ULONG64 expand_string(const TypedValueTree& w)
 {
 	// Return the address of the underlying char*. Only works when the union _Bx is interpreted as such a char* (strings longer than 4 characters ?).
-	const Field& bx = w->FindField("_Bx");
-	if (!bx.TypeId)
+	TypedValueTree bx;
+	const Field& myPair = w.FindField("_Mypair");
+	if (myPair.TypeId)
+	{
+		bx.FromField(myPair, w.GetAddressOfData());
+		bx.FillFields();
+		const Field& myVal2 = bx.FindField("_Myval2");
+		bx.FromField(myVal2, bx.GetAddressOfData());
+		bx.FillFields();
+		bx.FromField(bx.FindField("_Bx"), bx.GetAddressOfData());
+	}
+	else
+		bx.FromField(w.FindField("_Bx"), w.GetAddressOfData());
+	if (!bx.typeId)
 	{
 		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "_Bx not found\n");
 		return E_FAIL;
 	}
 
-	ULONG64 cAddr = 0;
-	ULONG cb;
-	const int ptrSize = sizeof(long*);
-	ReadMemory(w->GetAddressOfData() + bx.address, /*out*/&cAddr, ptrSize, &cb);
-	return cAddr;
+	return bx.address;
 }
 
 void Watch::Print(std::vector<WatchLine>& output)
@@ -641,7 +649,7 @@ void TypedValueTree::Print(long indent, std::vector<WatchLine>& output)
 
 	// Print type (or string value) and end of line
 	if (this->type.compare(0, 18, "std::basic_string<") == 0 && this->starCount <= 1)
-		output.back().cStrAddr = expand_string(this);
+		output.back().cStrAddr = expand_string(*this);
 	if (this->type == "char[]" || this->type == "char*")
 		output.back().cStrAddr = addr;
 	else
@@ -1065,7 +1073,7 @@ void FindVectorFirst(const TypedValueTree& vec, /*out*/TypedValueTree& myFirst)
 		const Field& myVal2 = myFirst.FindField("_Myval2");
 		myFirst.FromField(myVal2, myFirst.GetAddressOfData());
 		myFirst.FillFields();
-		myFirst.FromField(myFirst.FindField("_Myfirst"), myFirst.GetAddressOfData());;
+		myFirst.FromField(myFirst.FindField("_Myfirst"), myFirst.GetAddressOfData());
 	}
 	else
 		myFirst.FromField(vec.FindField("_Myfirst"), vec.GetAddressOfData());

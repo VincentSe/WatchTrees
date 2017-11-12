@@ -12,7 +12,18 @@ The WatchTrees commands below are quicker to type and manage. They can also be a
 
 ## What is a watch ?
 
-A watch starts with a C++ expression like the name of a variable. If the expression evaluates to a simple C++ type like `int` or `double`, it will display its value and type on a single line. If the expression evaluates to a pointer or an object with fields, it will offer to expand those fields on subsequent lines, giving a tree-like structure.
+A watch starts with a C++ expression like the name of a variable. If the expression evaluates to a simple C++ type like `int` or `double`, it will display its value and type on a single line. If the expression evaluates to a pointer or an object with fields, it will offer to expand those fields on subsequent lines, giving a tree-like structure :
+
+```
+  Name  Value       Type
+  i     37          int
+- a                 A
+    a   -858993460  int
+  + p   0x0         A*
+    aa  -858993460  int
+    d   32.000000   double
++ s                 std::basic_string<char,std::char_traits<char>,std::allocator<char> > "I am a string"
+```
 
 When `std` containers such as vectors, maps, lists, strings or iterators are expanded, the subwatches will pretty-print their contents.
 

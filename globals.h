@@ -18,7 +18,14 @@ extern PDEBUG_SYMBOLS2        g_ExtSymbols;
 extern IDebugAdvanced2*		  g_ExtAdvanced;
 extern IDebugSystemObjects*	  g_ExtSystem;
 
-HRESULT InitDebuggerGlobals(PDEBUG_CLIENT4 Client);
-void DestroyDebuggerGlobals();
+class NativeDbgEngAPIManager
+{
+	// Initialize and release the previous global variables
+
+public:
+	NativeDbgEngAPIManager(PDEBUG_CLIENT4 Client);
+	~NativeDbgEngAPIManager();
+	bool initialized;
+};
 
 #endif // #ifndef __DBGEXTS_H__

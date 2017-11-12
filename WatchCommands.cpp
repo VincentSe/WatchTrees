@@ -25,7 +25,8 @@ new_watch(PDEBUG_CLIENT4 Client, PCSTR args)
 HRESULT CALLBACK
 rename_watch(PDEBUG_CLIENT4 Client, PCSTR args)
 {
-	if (InitDebuggerGlobals(Client) != S_OK) return E_FAIL;
+	NativeDbgEngAPIManager dbgApi(Client);
+	if (!dbgApi.initialized) return E_FAIL;
 
 	unsigned int offset;
 	char watchName[128];
@@ -33,7 +34,6 @@ rename_watch(PDEBUG_CLIENT4 Client, PCSTR args)
 	if (numScan != 2 || offset < 0 || offset >= gWatches.size())
 	{
 		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "!unknown watch to rename.\n");
-		DestroyDebuggerGlobals();
 		return E_FAIL;
 	}
 
@@ -43,14 +43,14 @@ rename_watch(PDEBUG_CLIENT4 Client, PCSTR args)
 	w.valTree.address = 0;
 	w.expr = watchName;
 
-	DestroyDebuggerGlobals();
 	return S_OK;
 }
 
 HRESULT CALLBACK
 clear_watch(PDEBUG_CLIENT4 Client, PCSTR args)
 {
-	if (InitDebuggerGlobals(Client) != S_OK) return E_FAIL;
+	NativeDbgEngAPIManager dbgApi(Client);
+	if (!dbgApi.initialized) return E_FAIL;
 
 	unsigned int watchIndex = -1;
 	int r = sscanf(args, "%d", &watchIndex);
@@ -62,7 +62,6 @@ clear_watch(PDEBUG_CLIENT4 Client, PCSTR args)
 	{
 		gWatches.erase(gWatches.begin() + watchIndex);
 	}
-	DestroyDebuggerGlobals();
 	return S_OK;
 }
 
@@ -78,15 +77,14 @@ clear_watches(PDEBUG_CLIENT Client, PCSTR args)
 HRESULT CALLBACK
 expand_watch(PDEBUG_CLIENT4 Client, PCSTR args)
 {
-	if (InitDebuggerGlobals(Client) != S_OK) return E_FAIL;
+	NativeDbgEngAPIManager dbgApi(Client);
+	if (!dbgApi.initialized) return E_FAIL;
 
-	HRESULT res = S_OK;
 	char* pch = strtok((char*)args, " ");
 	if (!pch)
 	{
 		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "Unknown watch to expand\n");
-		res = E_FAIL;
-		goto expand_watch_finish;
+		return E_FAIL;
 	}
 
 	// Parse numbers separated by spaces
@@ -102,8 +100,7 @@ expand_watch(PDEBUG_CLIENT4 Client, PCSTR args)
 	if (watchPos[0] < 0 || watchPos[0] >= gWatches.size())
 	{
 		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "Unknown watch to expand %d\n", watchPos[0]);
-		res = E_FAIL;
-		goto expand_watch_finish;
+		return E_FAIL;
 	}
 
 	TypedValueTree* w = &gWatches[watchPos[0]].valTree;
@@ -119,8 +116,7 @@ expand_watch(PDEBUG_CLIENT4 Client, PCSTR args)
 			// w will be expanded below, it has no fieldCount yet
 			if (!w)
 			{
-				res = E_FAIL;
-				goto expand_watch_finish;
+				return E_FAIL;
 			}
 		}
 		else
@@ -129,29 +125,24 @@ expand_watch(PDEBUG_CLIENT4 Client, PCSTR args)
 			for (int i = 0; i < depth; i++)
 				g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "%d, ", watchPos[i]);
 			g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "\n");
-			res = E_FAIL;
-			goto expand_watch_finish;
+			return E_FAIL;
 		}
 	}
 
 	w->FillFieldsAndChildren();
-
-expand_watch_finish:
-	DestroyDebuggerGlobals();
-	return res;
+	return S_OK;
 }
 
 HRESULT CALLBACK
 collapse_watch(PDEBUG_CLIENT4 Client, PCSTR args)
 {
-	if (InitDebuggerGlobals(Client) != S_OK) return E_FAIL;
-	UNREFERENCED_PARAMETER(Client);
+	NativeDbgEngAPIManager dbgApi(Client);
+	if (!dbgApi.initialized) return E_FAIL;
 
 	char* pch = strtok((char*)args, " ");
 	if (!pch)
 	{
 		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "Unknown watch to collapse\n");
-		DestroyDebuggerGlobals();
 		return E_FAIL;
 	}
 
@@ -168,7 +159,6 @@ collapse_watch(PDEBUG_CLIENT4 Client, PCSTR args)
 	if (watchPos[0] < 0 || watchPos[0] >= gWatches.size())
 	{
 		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "Unknown watch to expand %d\n", watchPos[0]);
-		DestroyDebuggerGlobals();
 		return E_FAIL;
 	}
 
@@ -187,8 +177,8 @@ collapse_watch(PDEBUG_CLIENT4 Client, PCSTR args)
 HRESULT CALLBACK
 print_watches(PDEBUG_CLIENT4 Client, PCSTR args)
 {
-	if (InitDebuggerGlobals(Client) != S_OK) return E_FAIL;
-	UNREFERENCED_PARAMETER(args);
+	NativeDbgEngAPIManager dbgApi(Client);
+	if (!dbgApi.initialized) return E_FAIL;
 
 	char* pch = strtok((char*)args, " ");
 	bool reeval = pch && (strncmp(pch, "--reevalExpr", 2) == 0);
@@ -232,7 +222,6 @@ print_watches(PDEBUG_CLIENT4 Client, PCSTR args)
 		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "\n");
 	}
 
-	DestroyDebuggerGlobals();
 	return S_OK;
 }
 
@@ -241,7 +230,8 @@ set_watch_value(PDEBUG_CLIENT4 Client, PCSTR args)
 {
 	// for simple value types : bool, long, double, pointers
 
-	if (InitDebuggerGlobals(Client) != S_OK) return E_FAIL;
+	NativeDbgEngAPIManager dbgApi(Client);
+	if (!dbgApi.initialized) return E_FAIL;
 
 	unsigned int watchPos[64];
 	int depth = 0;
@@ -249,8 +239,7 @@ set_watch_value(PDEBUG_CLIENT4 Client, PCSTR args)
 	if (!pch)
 	{
 		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "Unknown watch to set\n");
-		DestroyDebuggerGlobals();
-		return S_FALSE;
+		return E_FAIL;
 	}
 
 	while (pch && (sscanf(pch, "%d", watchPos + depth) == 1))
@@ -297,7 +286,6 @@ set_watch_value(PDEBUG_CLIENT4 Client, PCSTR args)
 				if (g_ExtSymbols->GetTypeName(Module, (ULONG)TypeId, /*out*/typeName, 2048, 0) != S_OK)
 				{
 					g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "Couldn't get type name %d\n", TypeId);
-					DestroyDebuggerGlobals();
 					return E_FAIL;
 				}
 			}
@@ -319,7 +307,6 @@ set_watch_value(PDEBUG_CLIENT4 Client, PCSTR args)
 	if (!Address)
 	{
 		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "Unknown watch to set %d\n", TypeId);
-		DestroyDebuggerGlobals();
 		return E_FAIL;
 	}
 
@@ -383,7 +370,6 @@ set_watch_value(PDEBUG_CLIENT4 Client, PCSTR args)
 		cmd,
 		0); // only simple types
 
-	DestroyDebuggerGlobals();
 	return S_OK;
 }
 
@@ -428,7 +414,8 @@ test_sym(PDEBUG_CLIENT4 Client, PCSTR args)
 	// Symbols are loaded lazily, depending on the order of the commands sent to CDB,
 	// they increment the 3rd argument of SymGetTypeInfo.
 
-	if (InitDebuggerGlobals(Client) != S_OK) return E_FAIL;
+	NativeDbgEngAPIManager dbgApi(Client);
+	if (!dbgApi.initialized) return E_FAIL;
 
 	SymEnumContext context;
 	g_ExtSystem->GetCurrentProcessHandle(/*out*/&context.hProcess);
@@ -455,6 +442,5 @@ test_sym(PDEBUG_CLIENT4 Client, PCSTR args)
 	//		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "UNNAMMED SYMBOL %d\n", symTag);
 	//}
 
-	DestroyDebuggerGlobals();
 	return S_OK;
 }

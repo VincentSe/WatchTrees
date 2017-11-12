@@ -290,7 +290,8 @@ HRESULT sourceCode2ip(const char* moduleName,
 HRESULT CALLBACK
 mbp(PDEBUG_CLIENT4 Client, PCSTR args)
 {
-	if (InitDebuggerGlobals(Client) != S_OK) return E_FAIL;
+	NativeDbgEngAPIManager dbgApi(Client);
+	if (!dbgApi.initialized) return E_FAIL;
 	reset_clr_interfaces();
 	IXCLRDataProcess* iClr = GetIClr();
 	ISOSDacInterface* iClr3 = GetIClr3();
@@ -370,7 +371,6 @@ mbp(PDEBUG_CLIENT4 Client, PCSTR args)
 			DEBUG_EXECUTE_DEFAULT);
 	}
 
-	DestroyDebuggerGlobals();
 	return S_OK;
 }
 
@@ -511,17 +511,14 @@ HRESULT WhereIs(ULONG64 instructionPointer,
 	return E_FAIL;
 }
 
+/**
+	Go to a stack frame, resolving both native and managed functions.
+*/
 HRESULT CALLBACK
 mframe(PDEBUG_CLIENT4 Client, PCSTR args)
 {
-	// Activate a managed or native frame
-
-	if (InitDebuggerGlobals(Client) != S_OK) return E_FAIL;
-	init_clr_interfaces();
-	IXCLRDataProcess* iClr = GetIClr();
-	IDebugSymbols3* symbols3;
-	if (Client->QueryInterface(__uuidof(IDebugSymbols3), (void **)&symbols3) != S_OK)
-		dprintf("failed symbols3\n");
+	NativeDbgEngAPIManager dbgApi(Client);
+	if (!dbgApi.initialized) return E_FAIL;
 
 	int frameNumber;
 	if (sscanf(args, "%x", &frameNumber) != 1)
@@ -536,6 +533,12 @@ mframe(PDEBUG_CLIENT4 Client, PCSTR args)
 		dprintf("cannot get frame\n");
 		return E_FAIL;
 	}
+
+	init_clr_interfaces();
+	IXCLRDataProcess* iClr = GetIClr();
+	IDebugSymbols3* symbols3;
+	if (Client->QueryInterface(__uuidof(IDebugSymbols3), (void **)&symbols3) != S_OK)
+		dprintf("failed symbols3\n");
 
 	char cmd[256];
 	sprintf(cmd, ".frame %d", frameNumber);
@@ -569,15 +572,17 @@ mframe(PDEBUG_CLIENT4 Client, PCSTR args)
 			DEBUG_STACK_FRAME_ADDRESSES);
 
 	symbols3->Release();
-	DestroyDebuggerGlobals();
 	return S_OK;
 }
 
+/**
+	Print call stack, resolving both native and managed functions.
+*/
 HRESULT CALLBACK
 mkpn(PDEBUG_CLIENT4 Client, PCSTR args)
 {
-	if (InitDebuggerGlobals(Client) != S_OK) return E_FAIL;
-	UNREFERENCED_PARAMETER(args);
+	NativeDbgEngAPIManager dbgApi(Client);
+	if (!dbgApi.initialized) return E_FAIL;
 
 	reset_clr_interfaces(); // get all newly jitted methods
 	IXCLRDataProcess* iClr = GetIClr();
@@ -620,6 +625,5 @@ mkpn(PDEBUG_CLIENT4 Client, PCSTR args)
 	}
 
 	symbols3->Release();
-	DestroyDebuggerGlobals();
 	return S_OK;
 }
