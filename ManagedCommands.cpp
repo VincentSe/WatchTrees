@@ -726,7 +726,7 @@ mp(PDEBUG_CLIENT4 Client, PCSTR args)
 	NativeDbgEngAPIManager dbgApi(Client);
 	if (!dbgApi.initialized) return E_FAIL;
 
-	bool stepInto = (*args == 't');
+	const bool stepInto = (*args == 't');
 
 	IDebugSymbols3* symbols3;
 	if (Client->QueryInterface(__uuidof(IDebugSymbols3), (void **)&symbols3) != S_OK)
@@ -736,139 +736,117 @@ mp(PDEBUG_CLIENT4 Client, PCSTR args)
 	IXCLRDataProcess* iClr = GetIClr();
 	ISOSDacInterface* iClr3 = GetIClr3();
 
-	//if (stepInto)
-	//{
-	//	// The method we want to step into may not have been jitted yet : stepping in native code would enter the JIT compiler.
-	//	// Parse MSIL to get the address of the function stepped into and set a temporary breakpoint there.
-
-	//	DEBUG_STACK_FRAME frame;
-	//	g_ExtControl->GetStackTrace(0, 0, 0, &frame, 1, 0);
-	//	ULONG64 ilAddr;
-	//	WCHAR mngFuncName[1024];
-	//	ip2il(frame.InstructionOffset, /*out*/&ilAddr, /*out*/mngFuncName,
-	//		iClr,
-	//		symbols3);
-
-	//	CLRDATA_ENUM hdl = 0;
-	//	IXCLRDataMethodInstance* meth = 0;
-	//	if (iClr->StartEnumMethodInstancesByAddress(frame.InstructionOffset, 0, &hdl) != S_OK)
-	//	{
-	//		//dprintf("start enum method failed\n");
-	//		return E_FAIL;
-	//	}
-	//	iClr->EnumMethodInstanceByAddress(&hdl, &meth);
-	//	iClr->EndEnumMethodInstancesByAddress(hdl);
-
-	//	ULONG32 tokenToCall;
-	//	ULONG64 moduleToCall;
-	//	if (parse_call_instruction(meth, frame.InstructionOffset, &tokenToCall, &moduleToCall) == S_OK)
-	//	{
-	//		CLRDATA_ADDRESS methodToCall;
-	//		DacpMethodDescData methDescData;
-	//		iClr3->GetMethodDescFromToken(moduleToCall, tokenToCall, &methodToCall);
-	//		iClr3->GetMethodDescData(methodToCall, 0, /*out*/&methDescData,
-	//			0, 0, 0);
-	//		if (!methDescData.bHasNativeCode)
-	//		{
-	//			IXCLRDataModule* module = 0;
-	//			iClr3->GetModule(moduleToCall, &module);
-	//			IXCLRDataMethodDefinition* clrMethod = 0;
-	//			module->GetMethodDefinitionByToken(tokenToCall, &clrMethod);
-	//			iClr3->GetMethodDescName(methodToCall, 1024, /*out*/mngFuncName, 0);
-
-	//			// CLRDATA_ENUM hdl = 0;
-
-	//			// module->lpVtbl->StartEnumMethodDefinitionsByName(module, mngFuncName, 0, &hdl);
-	//			// module->lpVtbl->EnumMethodDefinitionByName(module, &hdl, &clrMethod);
-	//			clrMethod->SetCodeNotification(true); // tell the JIT compiler to throw an exception of type clrn when it does this method
-	//			clrMethod->Release();
-	//			// module->lpVtbl->EndEnumMethodDefinitionsByName(module, hdl);
-
-
-	//			// module->lpVtbl->StartEnumExtents(module, &hdl);
-	//			// ULONG outBuf[8];
-	//			// module->lpVtbl->EnumExtent(module, &hdl, outBuf);
-	//			// module->lpVtbl->EndEnumExtents(module, hdl);
-	//			// ULONG64 moduleBaseAddress = *(ULONG64*)outBuf;
-
-	//			// DEBUG_MODULE_AND_ID methSymbolId;
-	//			// if (symbols3->GetSymbolEntryByToken(moduleBaseAddress,
-	//			// 									tokenToCall,
-	//			// 									&methSymbolId) != S_OK)
-	//			// {
-	//			// 	// PDB is not there or could not be associated with the executing code
-	//			// 	//dprintf("symb entry by token failed\n");
-	//			// 	module->lpVtbl->Release(module);
-	//			// 	return S_OK;
-	//			// }
-	//			// DEBUG_SYMBOL_ENTRY methSymbol;
-	//			// if (symbols3->GetSymbolEntryInformation(&methSymbolId, /*out*/ &methSymbol) != S_OK)
-	//			// 	dprintf("symb entry failed\n");
-
-
-	//			char funcNameBis[256];
-	//			wcstombs(funcNameBis, mngFuncName, 256);
-	//			// ULONG line;
-	//			// char file[1024];
-	//			// g_ExtSymbols->GetLineByOffset(methSymbol.Offset, &line, file, 1024, 0, 0);
-	//			gPendingBreakpointList.Add(new ManagedBreakpoint(0, 0, funcNameBis, 0));
-	//			//list_managed_breakpoints(symbols3);
-	//			//g_ExtControl->OutputPrompt(DEBUG_OUTCTL_THIS_CLIENT, 0);
-	//			stepInto = false; // trigger the breakpoint by requesting a step over it
-	//			module->Release();
-	//		}
-	//	}
-	//	meth->Release();
-	//}
-
-	DEBUG_STACK_FRAME frame;
-	g_ExtControl->GetStackTrace(0, 0, 0, &frame, 1, 0);
+	DEBUG_STACK_FRAME currentFrame;
+	g_ExtControl->GetStackTrace(0, 0, 0, /*out*/&currentFrame, 1, 0);
 	char initFunction[1024];
 	char function[1024];
 	bool managed;
-	ULONG initLine, line;
-	WhereIs(frame.InstructionOffset, 0, &initLine, /*out*/initFunction, &managed, iClr, symbols3);
+	ULONG initLine = 0, line;
+	WhereIs(currentFrame.InstructionOffset, 0, &initLine, /*out*/initFunction, &managed, iClr, symbols3);
 
 	if (managed)
 	{
-		// The source code is not always executed vertically : end of loops, return of functions, ...
-		// We must step in assembler and query the source code until the line changes.
-		line = initLine;
 		ULONG stepCount = 0;
-		ip2ilContext context(frame.InstructionOffset, iClr, symbols3);
-		while ((line == initLine
-			|| (!line && !*function)
-			|| (!line && strcmp(function, initFunction) == 0))
-			&& stepCount < 60) // against infinite loops
+		DEBUG_STACK_FRAME frame = currentFrame;
+		if (stepInto)
 		{
-			g_ExtControl->Execute(DEBUG_OUTCTL_IGNORE |
-				DEBUG_OUTCTL_NOT_LOGGED,
-				stepInto ? "t" : "p",
-				DEBUG_EXECUTE_DEFAULT);
-
-			// wait for the step to finish
-			ULONG ulStatus = 0;
-			do
+			// TODO : DISASSEMBLE AND FIND THE NEXT CALL INSTRUCTION
+			// Step in assembler until the stack changes
+			while (frame.StackOffset == currentFrame.StackOffset
+				&& stepCount < 60) // against infinite loops
 			{
-				g_ExtControl->WaitForEvent(DEBUG_WAIT_DEFAULT, INFINITE);
-				g_ExtControl->GetExecutionStatus(&ulStatus);
-				//dprintf("Wait currStat 0x%x, step count %d\n0:000>\n", ulStatus, stepCount);
-			} while (ulStatus != DEBUG_STATUS_BREAK && ulStatus != DEBUG_STATUS_NO_DEBUGGEE);
+				g_ExtControl->Execute(DEBUG_OUTCTL_IGNORE |
+					DEBUG_OUTCTL_NOT_LOGGED,
+					"t",
+					DEBUG_EXECUTE_DEFAULT);
 
-			g_ExtControl->GetStackTrace(0, 0, 0, &frame, 1, 0);
-			ULONG32 ilOffset = 0;
-			context.meth->GetILOffsetsByAddress(frame.InstructionOffset, 1, 0, &ilOffset); // != S_OK) // careful to offsets 0xfffffffd and the like
-			g_ExtSymbols->GetLineByOffset(context.methAddress + ilOffset, &line, 0, 0, 0, 0);
-			stepCount++;
+				// wait for the step to finish
+				ULONG ulStatus = 0;
+				do
+				{
+					g_ExtControl->WaitForEvent(DEBUG_WAIT_DEFAULT, INFINITE);
+					g_ExtControl->GetExecutionStatus(&ulStatus);
+				} while (ulStatus != DEBUG_STATUS_BREAK && ulStatus != DEBUG_STATUS_NO_DEBUGGEE);
+
+				g_ExtControl->GetStackTrace(0, 0, 0, /*out*/&frame, 1, 0);
+				stepCount++;
+			}
+
+			char disassBuf[128];
+			ULONG flags = 0;
+			ULONG64 endOffset;
+			g_ExtControl->Disassemble(
+				frame.InstructionOffset,
+				flags,
+				/*out*/disassBuf,
+				128,
+				nullptr,
+				&endOffset);
+
+			if (strstr(disassBuf, "call    clr!PrecodeFixupThunk"))
+			{
+				// The JIT compiler will be called, step twice
+				// STEP UNTIL ENTER ThePreStub
+				// THEN STEP OVER WORKER
+				// THEN STEP UNTIL jmp rax
+				g_ExtControl->Execute(DEBUG_OUTCTL_IGNORE |
+					DEBUG_OUTCTL_NOT_LOGGED,
+					"t ; t",
+					DEBUG_EXECUTE_DEFAULT);
+			}
+			else
+			{
+				// the function was already jitted, we're good
+			}
+
+
+			// 000007fe`903100d1 e84abfeeff      call    000007fe`901fc020
+			// 000007fe`901fc020 e8cb5e755f      call    clr!PrecodeFixupThunk (000007fe`ef951ef0) cannot be disassembled, step in it goes out
+			// 000007fe`ef951f04 e907030000      jmp     clr!ThePreStub (000007fe`ef952210)
+
 		}
+		else
+		{
+			// The source code is not always executed vertically : end of loops, return of functions, ...
+			// We must step in assembler and query the source code until the line changes.
+			line = initLine;
+			ULONG stepCount = 0;
+			ip2ilContext context(frame.InstructionOffset, iClr, symbols3);
+			while ((line == initLine
+				|| (!line && !*function)
+				|| (!line && strcmp(function, initFunction) == 0))
+				&& stepCount < 60) // against infinite loops
+			{
+				g_ExtControl->Execute(DEBUG_OUTCTL_IGNORE |
+					DEBUG_OUTCTL_NOT_LOGGED,
+					stepInto ? "t" : "p",
+					DEBUG_EXECUTE_DEFAULT);
 
-		char file[1024];
-		WhereIs(frame.InstructionOffset, file, &line, function, &managed, iClr, symbols3);
+				// wait for the step to finish
+				ULONG ulStatus = 0;
+				do
+				{
+					g_ExtControl->WaitForEvent(DEBUG_WAIT_DEFAULT, INFINITE);
+					g_ExtControl->GetExecutionStatus(&ulStatus);
+					//dprintf("Wait currStat 0x%x, step count %d\n0:000>\n", ulStatus, stepCount);
+				} while (ulStatus != DEBUG_STATUS_BREAK && ulStatus != DEBUG_STATUS_NO_DEBUGGEE);
 
-		dprintf("%s(%d)+0\n(0) %s\n", file, line, function);
+				g_ExtControl->GetStackTrace(0, 0, 0, &frame, 1, 0);
+				ULONG32 ilOffset = 0;
+				context.meth->GetILOffsetsByAddress(frame.InstructionOffset, 1, 0, &ilOffset); // != S_OK) // careful to offsets 0xfffffffd and the like
+				g_ExtSymbols->GetLineByOffset(context.methAddress + ilOffset, &line, 0, 0, 0, 0);
+				stepCount++;
+			}
+
+			char file[1024];
+			WhereIs(frame.InstructionOffset, file, &line, function, &managed, iClr, symbols3);
+
+			dprintf("%s(%d)+0\n(0) %s\n", file, line, function);
+		}
 	}
 	else
 	{
+		// Native step, then print location of instruction pointer
 		g_ExtControl->Execute(DEBUG_OUTCTL_IGNORE |
 			DEBUG_OUTCTL_NOT_LOGGED,
 			stepInto ? "t" : "p",

@@ -564,7 +564,9 @@ ULONG64 expand_string(const TypedValueTree& w)
 		return E_FAIL;
 	}
 
-	return bx.address;
+	bx.FillFields();
+	bx.FromField(bx.FindField("_Ptr"), bx.GetAddressOfData());
+	return bx.GetAddressOfData();
 }
 
 void Watch::Print(std::vector<WatchLine>& output)
@@ -1065,6 +1067,16 @@ Field TypedValueTree::FindField(const char* fieldName) const
 
 void FindVectorFirst(const TypedValueTree& vec, /*out*/TypedValueTree& myFirst)
 {
+	if (vec.fieldName == "_Myfirst")
+	{
+		myFirst.fieldName = vec.fieldName;
+		myFirst.fPointer = vec.fPointer;
+		myFirst.address = vec.address;
+		myFirst.typeId = vec.typeId;
+		myFirst.starCount = vec.starCount;
+		return;
+	}
+
 	const Field& myPair = vec.FindField("_Mypair");
 	if (myPair.TypeId)
 	{
@@ -1092,10 +1104,13 @@ HRESULT expand_vector(/*out*/TypedValueTree& w)
 	ULONG64 hProcess = 0;
 	g_ExtSystem->GetCurrentProcessHandle(/*out*/&hProcess);
 	BOOL b;
-	DWORD type = 0, baseType = 0;
-	b = SymGetTypeInfo((HANDLE)hProcess, w.module, myFirst.typeId, TI_GET_TYPE, &type); // SymTagData -> SymTagPointerType
-	if (!b || !SymGetTypeInfo((HANDLE)hProcess, w.module, type, TI_GET_TYPE, &baseType) // SymTagPointerType -> pointed type
-		|| myFirst.typeId == type || baseType == type)
+	DWORD type = myFirst.typeId, baseType = 0;
+	DWORD symtag = 0;
+	b = SymGetTypeInfo((HANDLE)hProcess, w.module, myFirst.typeId, TI_GET_SYMTAG, &symtag);
+	if (symtag == 7)
+		b = SymGetTypeInfo((HANDLE)hProcess, w.module, myFirst.typeId, TI_GET_TYPE, &type); // SymTagData -> SymTagPointerType
+	if (!SymGetTypeInfo((HANDLE)hProcess, w.module, type, TI_GET_TYPE, &baseType) // SymTagPointerType -> pointed type
+		|| baseType == type)
 	{
 		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "Cannot get pointed type\n");
 		return E_FAIL;
@@ -1447,13 +1462,7 @@ void TypedValueTree::FillFieldsAndChildren()
 	}
 	else if (strncmp(this->fieldName.c_str(), "_Myfirst", 8) == 0) // subclasses of std::vector
 	{
-		this->typeId = this->parent->typeId;
-		this->address = this->parent->address;
-		this->fields = this->parent->fields;
-		this->fieldCount = this->fields.size();
 		expand_vector(*this);
-		this->fields.clear();
-		this->fieldCount = 0;
 	}
 	else if (this->type.compare(0, 10, "std::list<") == 0)
 	{
