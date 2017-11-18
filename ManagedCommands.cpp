@@ -337,6 +337,8 @@ mbp(PDEBUG_CLIENT4 Client, PCSTR args)
 	{
 		if (res == S_FALSE)
 		{
+			// TODO move this into sourceCode2ip
+
 			// remember to add a breakpoint when this method is Jitted
 			IXCLRDataModule* clrModule = 0;
 			CLRDATA_ENUM hdl = 0, hdl2 = 0;
@@ -937,5 +939,147 @@ mp(PDEBUG_CLIENT4 Client, PCSTR args)
 
 	symbols3->Release();
 	registers->Release();
+	return S_OK;
+}
+
+class BreakpointSetter : public IXCLRDataExceptionNotification
+{
+	HRESULT QueryInterface(_GUID const &, void ** outPtr) override
+	{
+		*outPtr = this;
+		return S_OK;
+	}
+
+	virtual ULONG AddRef(void) override
+	{
+		return S_OK;
+	}
+
+	virtual ULONG Release(void) override
+	{
+		return S_OK;
+	}
+
+	virtual HRESULT OnCodeGenerated(/* [in] */ IXCLRDataMethodInstance *genMethod) override
+	{
+		WCHAR methodNameW[256];
+		genMethod->GetName(0, 256, 0, /*out*/methodNameW);
+		char methodName[256];
+		wcstombs(methodName, methodNameW, 256);
+
+		ManagedBreakpoint* bp = gPendingBreakpointList.Find(methodName);
+		if (bp)
+		{
+			bool managed;
+			IDebugBreakpoint* ibp;
+			g_ExtControl->AddBreakpoint(DEBUG_BREAKPOINT_CODE,
+				bp->requestedId,
+				&ibp);
+			if (*bp->file)
+				sourceCode2ip(bp->module, bp->file, methodName, bp->line, /*out*/&bp->address, &managed);
+			else
+			{
+				CLRDATA_ADDRESS_RANGE ip2;
+				genMethod->GetAddressRangesByILOffset(0, 1, 0,
+					/*out*/ &ip2);
+				bp->address = ip2.startAddress;
+				// temporary breakpoint for stepping into a method
+				// ibp->SetFlags(DEBUG_BREAKPOINT_ONE_SHOT); // doesn't work :(
+				ULONG bpId;
+				ibp->GetId(&bpId);
+				char cmd[64];
+				sprintf_s(cmd, 64, "bc %d", bpId);
+				ibp->SetCommand(cmd);
+			}
+			dprintf("resolving deferred breakpoint %s %s %s %d", bp->module, bp->file, methodName, bp->line);
+			dprintf(" %p\n", bp->address);
+
+			ibp->SetFlags(DEBUG_BREAKPOINT_ENABLED);
+			ibp->SetOffset(bp->address);
+			gPendingBreakpointList.Remove(bp);
+		}
+		else
+			dprintf("pending breakpoint not found\n");
+
+		return S_OK;
+	}
+
+	virtual HRESULT STDMETHODCALLTYPE OnCodeDiscarded(
+		/* [in] */ IXCLRDataMethodInstance *method)
+	{
+		return S_OK;
+	}
+
+	virtual HRESULT STDMETHODCALLTYPE OnProcessExecution(
+		/* [in] */ ULONG32 state)
+	{
+		return S_OK;
+	}
+
+	virtual HRESULT STDMETHODCALLTYPE OnTaskExecution(
+		/* [in] */ IXCLRDataTask *task,
+		/* [in] */ ULONG32 state)
+	{
+		return S_OK;
+	}
+
+	virtual HRESULT STDMETHODCALLTYPE OnModuleLoaded(
+		/* [in] */ IXCLRDataModule *mod)
+	{
+		return S_OK;
+	}
+
+	virtual HRESULT STDMETHODCALLTYPE OnModuleUnloaded(
+		/* [in] */ IXCLRDataModule *mod)
+	{
+		return S_OK;
+	}
+
+	virtual HRESULT STDMETHODCALLTYPE OnTypeLoaded(
+		/* [in] */ IXCLRDataTypeInstance *typeInst)
+	{
+		return S_OK;
+	}
+
+	virtual HRESULT STDMETHODCALLTYPE OnTypeUnloaded(
+		/* [in] */ IXCLRDataTypeInstance *typeInst)
+	{
+		return S_OK;
+	}
+};
+
+HRESULT CALLBACK
+HandleCLRNotification(PDEBUG_CLIENT4 Client, PCSTR args)
+{
+	// Handler of exception type clrn, for example when a function is jitted.
+	// In SOS it's !HandleClrn.
+
+	NativeDbgEngAPIManager dbgApi(Client);
+	if (!dbgApi.initialized) return E_FAIL;
+	reset_clr_interfaces(); // old ones might be corrupt here
+	UNREFERENCED_PARAMETER(args);
+
+	ULONG Type, ProcessId, ThreadId;
+	_EXCEPTION_RECORD64 rec;
+	ULONG extraReadCount;
+	g_ExtControl->GetLastEventInformation(&Type,
+		&ProcessId,
+		&ThreadId,
+		/*out*/(void*)&rec,
+		sizeof(rec),
+		&extraReadCount,
+		0, 0, 0);
+
+	IXCLRDataProcess* iClr = GetIClr();
+	BreakpointSetter bs;
+	iClr->TranslateExceptionRecordToNotification(&rec, &bs);
+
+	g_ExtControl->Execute(DEBUG_OUTCTL_ALL_CLIENTS |
+		DEBUG_OUTCTL_OVERRIDE_MASK |
+		DEBUG_OUTCTL_NOT_LOGGED,
+		"g", // Command to be executed
+		DEBUG_EXECUTE_DEFAULT);
+	g_ExtControl->OutputPrompt(DEBUG_OUTCTL_THIS_CLIENT, 0);
+
 	return S_OK;
 }

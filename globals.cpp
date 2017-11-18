@@ -91,24 +91,19 @@ DebugExtensionInitialize(PULONG Version, PULONG Flags)
 	if ((Hr = DebugClient->QueryInterface(__uuidof(IDebugControl),
 		(void **)&DebugControl)) == S_OK)
 	{
-
-		//
-		// Get the windbg-style extension APIS
-		//
 		ExtensionApis.nSize = sizeof(ExtensionApis);
 		Hr = DebugControl->GetWindbgExtensionApis64(&ExtensionApis);
 
-		//DebugControl->Execute(DEBUG_OUTCTL_ALL_CLIENTS |
-		//	DEBUG_OUTCTL_OVERRIDE_MASK |
-		//	DEBUG_OUTCTL_NOT_LOGGED,
-		//	"sxd -c \"!HandleCLRNotification\" clrn",
-		//	DEBUG_EXECUTE_DEFAULT);
-
+		// Route CLR Notifications (thrown as exceptions) to function HandleCLRNotification
+		DebugControl->Execute(DEBUG_OUTCTL_ALL_CLIENTS |
+			DEBUG_OUTCTL_OVERRIDE_MASK |
+			DEBUG_OUTCTL_NOT_LOGGED,
+			"sxd -c \"!HandleCLRNotification\" clrn",
+			DEBUG_EXECUTE_DEFAULT);
 		DebugControl->Release();
-
 	}
 
-	CoInitializeEx(0, 0);
+	//CoInitializeEx(0, 0);
 	DebugClient->Release();
 	return Hr;
 }
