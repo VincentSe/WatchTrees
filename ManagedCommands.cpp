@@ -717,6 +717,33 @@ mbl(PDEBUG_CLIENT4 Client, PCSTR args)
 	return S_OK;
 }
 
+ULONG64 disassembleNextCallAddress(ULONG64 startAddress, bool jump)
+{
+	char disassBuf[128] = "";
+	ULONG flags = 0, instructionCount = 0;
+	ULONG64 addr = startAddress;
+	char* c = 0;
+	while (!c && instructionCount < 200)
+	{
+		g_ExtControl->Disassemble(
+			addr,
+			flags,
+			/*out*/disassBuf,
+			128,
+			nullptr,
+			/*out*/&addr);
+		c = strstr(disassBuf, jump ? " jmp " : " call ");
+		instructionCount++;
+	}
+
+	char* parenthesis = strstr(c, " (");
+	c = parenthesis ? parenthesis + 2 : c + 5; // start of called address
+	char* end;
+	const ULONG64 callAddr = strtoull(c, /*out*/&end, 16);
+	const ULONG64 lowerBits = strtoull(end + 1, /*out*/&end, 16); // skip apostrophe
+	return (callAddr << 32) + lowerBits; 
+}
+
 /**
 	Step one line of source code (native or managed).
 */
@@ -750,33 +777,15 @@ mp(PDEBUG_CLIENT4 Client, PCSTR args)
 		DEBUG_STACK_FRAME frame = currentFrame;
 		if (stepInto)
 		{
-			// TODO : DISASSEMBLE AND FIND THE NEXT CALL INSTRUCTION
-			// Step in assembler until the stack changes
-			while (frame.StackOffset == currentFrame.StackOffset
-				&& stepCount < 60) // against infinite loops
-			{
-				g_ExtControl->Execute(DEBUG_OUTCTL_IGNORE |
-					DEBUG_OUTCTL_NOT_LOGGED,
-					"t",
-					DEBUG_EXECUTE_DEFAULT);
-
-				// wait for the step to finish
-				ULONG ulStatus = 0;
-				do
-				{
-					g_ExtControl->WaitForEvent(DEBUG_WAIT_DEFAULT, INFINITE);
-					g_ExtControl->GetExecutionStatus(&ulStatus);
-				} while (ulStatus != DEBUG_STATUS_BREAK && ulStatus != DEBUG_STATUS_NO_DEBUGGEE);
-
-				g_ExtControl->GetStackTrace(0, 0, 0, /*out*/&frame, 1, 0);
-				stepCount++;
-			}
+			ULONG64 callAddr = disassembleNextCallAddress(currentFrame.InstructionOffset, false);
+			// TODO: if the call instruction is at a different source code line, the step finishes before it.
+			// Default to !stepInto
 
 			char disassBuf[128];
 			ULONG flags = 0;
 			ULONG64 endOffset;
 			g_ExtControl->Disassemble(
-				frame.InstructionOffset,
+				callAddr,
 				flags,
 				/*out*/disassBuf,
 				128,
@@ -785,25 +794,39 @@ mp(PDEBUG_CLIENT4 Client, PCSTR args)
 
 			if (strstr(disassBuf, "call    clr!PrecodeFixupThunk"))
 			{
-				// The JIT compiler will be called, step twice
-				// STEP UNTIL ENTER ThePreStub
-				// THEN STEP OVER WORKER
-				// THEN STEP UNTIL jmp rax
-				g_ExtControl->Execute(DEBUG_OUTCTL_IGNORE |
-					DEBUG_OUTCTL_NOT_LOGGED,
-					"t ; t",
-					DEBUG_EXECUTE_DEFAULT);
+				callAddr = disassembleNextCallAddress(callAddr, false);
+				callAddr = disassembleNextCallAddress(callAddr, true); // jump to ThePreStub
+
+				// Find jmp rax, which is where the method will be JIT compiled
+				char* c = 0;
+				ULONG instructionCount = 0;
+				while (!c && instructionCount < 200)
+				{
+					g_ExtControl->Disassemble(
+						callAddr,
+						flags,
+						/*out*/disassBuf,
+						128,
+						nullptr,
+						/*out*/&callAddr);
+					c = strstr(disassBuf, " jmp     rax");
+					instructionCount++;
+				}
+
+				if (c)
+				{
+					// Set a breakpoint at callAddr-3 and release the debugger
+					char cmd[256];
+					sprintf(cmd, "bp 0x%llX ; g ; t", callAddr - 3); // TODO delete the breakpoint when it's hit
+					g_ExtControl->Execute(DEBUG_OUTCTL_IGNORE,
+						cmd,
+						DEBUG_EXECUTE_DEFAULT);
+				}
 			}
 			else
 			{
 				// the function was already jitted, we're good
 			}
-
-
-			// 000007fe`903100d1 e84abfeeff      call    000007fe`901fc020
-			// 000007fe`901fc020 e8cb5e755f      call    clr!PrecodeFixupThunk (000007fe`ef951ef0) cannot be disassembled, step in it goes out
-			// 000007fe`ef951f04 e907030000      jmp     clr!ThePreStub (000007fe`ef952210)
-
 		}
 		else
 		{
