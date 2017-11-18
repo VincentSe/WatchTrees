@@ -379,12 +379,11 @@ mbp(PDEBUG_CLIENT4 Client, PCSTR args)
 class ip2ilContext
 {
 public:
-	ip2ilContext(ULONG64 ip, IXCLRDataProcess* iClr, IDebugSymbols3* iSymbols3)
+	ip2ilContext(ULONG64 ip, IDebugSymbols3* iSymbols3)
 	{
+		IXCLRDataProcess* iClr = GetIClr();
 		CLRDATA_ENUM hdl = 0;
 		IXCLRDataAppDomain* domain = 0;
-		meth = 0;
-		methAddress = 0;
 		HRESULT startEnum = iClr->StartEnumMethodInstancesByAddress(ip, domain, &hdl);
 		if (startEnum == S_OK
 			&& iClr->EnumMethodInstanceByAddress(&hdl, &meth) == S_OK
@@ -427,16 +426,15 @@ public:
 		meth = 0;
 	}
 
-	IXCLRDataMethodInstance* meth;
-	ULONG64 methAddress;
+	IXCLRDataMethodInstance* meth = 0;
+	ULONG64 methAddress = 0;
 };
 
 
-HRESULT ip2il(ULONG64 ip, /*out*/ PULONG64 ilAddr, /*out*/ WCHAR* managedMethodName,
-	IXCLRDataProcess* iClr,
-	IDebugSymbols3* iSymbols3)
+HRESULT ip2il(ULONG64 ip, /*out*/ PULONG64 ilAddr, /*out*/ WCHAR* managedMethodName, IDebugSymbols3* iSymbols3)
 {
 	// Convert a native instruction pointer to an MSIL address
+	IXCLRDataProcess* iClr = GetIClr();
 
 	if (managedMethodName)
 		*managedMethodName = 0;
@@ -445,7 +443,7 @@ HRESULT ip2il(ULONG64 ip, /*out*/ PULONG64 ilAddr, /*out*/ WCHAR* managedMethodN
 	if (ilAddr)
 		*ilAddr = 0;
 
-	ip2ilContext context(ip, iClr, iSymbols3);
+	ip2ilContext context(ip, iSymbols3);
 	if (!context.methAddress)
 	{
 		//dprintf("first start enum failed on address 0x%p\n", ip);
@@ -486,8 +484,7 @@ HRESULT WhereIs(ULONG64 instructionPointer,
 	// In core C# functions such as ReadLine, a native symbol in mscorlib
 	// will be found, nevertheless the address is managed.
 	ULONG64 ilAddr = 0;
-	if (iClr &&
-		ip2il(instructionPointer, /*out*/&ilAddr, /*out*/(WCHAR*)function, iClr, iSymbols3) == S_OK)
+	if (ip2il(instructionPointer, /*out*/&ilAddr, /*out*/(WCHAR*)function, iSymbols3) == S_OK)
 	{
 		*managed = true;
 		if (ilAddr)
@@ -744,12 +741,32 @@ ULONG64 disassembleNextCallAddress(ULONG64 startAddress, bool jump)
 	return (callAddr << 32) + lowerBits; 
 }
 
+void StepComplete(char* stepCommand, ULONG64 startIP, IDebugRegisters* registers)
+{
+	g_ExtControl->Execute(DEBUG_OUTCTL_IGNORE | DEBUG_OUTCTL_NOT_LOGGED,
+		stepCommand,
+		DEBUG_EXECUTE_DEFAULT);
+
+	// Wait for step to finish. Before g_ExtControl->Execute, the status was probably already DEBUG_STATUS_BREAK,
+	// we must include the line check in the wait test.
+	ULONG ulStatus = 0;
+	ULONG64 newRip = 0;
+	bool stoppedAfterRip = false;
+	while (!stoppedAfterRip && ulStatus != DEBUG_STATUS_NO_DEBUGGEE)
+	{
+		g_ExtControl->WaitForEvent(DEBUG_WAIT_DEFAULT, INFINITE);
+		g_ExtControl->GetExecutionStatus(&ulStatus);
+		stoppedAfterRip = (S_OK == registers->GetInstructionOffset(&newRip) && newRip != startIP && ulStatus == DEBUG_STATUS_BREAK);
+	}
+}
+
 /**
 	Step one line of source code (native or managed).
 */
 HRESULT CALLBACK
 mp(PDEBUG_CLIENT4 Client, PCSTR args)
 {
+	char file[1024] = "";
 	NativeDbgEngAPIManager dbgApi(Client);
 	if (!dbgApi.initialized) return E_FAIL;
 
@@ -758,26 +775,32 @@ mp(PDEBUG_CLIENT4 Client, PCSTR args)
 	IDebugSymbols3* symbols3;
 	if (Client->QueryInterface(__uuidof(IDebugSymbols3), (void **)&symbols3) != S_OK)
 		dprintf("failed symbols3\n");
+	IDebugRegisters* registers;
+	if (Client->QueryInterface(__uuidof(IDebugRegisters), (void **)&registers) != S_OK)
+		dprintf("failed registers\n");
 
 	init_clr_interfaces();
 	IXCLRDataProcess* iClr = GetIClr();
 	ISOSDacInterface* iClr3 = GetIClr3();
 
-	DEBUG_STACK_FRAME currentFrame;
-	g_ExtControl->GetStackTrace(0, 0, 0, /*out*/&currentFrame, 1, 0);
-	char initFunction[1024];
-	char function[1024];
-	bool managed;
-	ULONG initLine = 0, line;
-	WhereIs(currentFrame.InstructionOffset, 0, &initLine, /*out*/initFunction, &managed, iClr, symbols3);
+	ULONG64 rip = 0;
+	registers->GetInstructionOffset(&rip);
+	char initFunction[1024] = "";
+	char function[1024] = "";
+	bool managed = false;
+	ULONG initLine = 0, line = 0;
+	WhereIs(rip, 0, &initLine, /*out*/initFunction, &managed, iClr, symbols3);
 
 	if (managed)
 	{
 		ULONG stepCount = 0;
-		DEBUG_STACK_FRAME frame = currentFrame;
 		if (stepInto)
 		{
-			ULONG64 callAddr = disassembleNextCallAddress(currentFrame.InstructionOffset, false);
+			PDEBUG_BREAKPOINT bp;
+			g_ExtControl->AddBreakpoint(DEBUG_BREAKPOINT_CODE, DEBUG_ANY_ID, /*out*/&bp);
+			bp->SetFlags(DEBUG_BREAKPOINT_ENABLED | DEBUG_BREAKPOINT_ONE_SHOT);
+
+			ULONG64 callAddr = disassembleNextCallAddress(rip, false);
 			// TODO: if the call instruction is at a different source code line, the step finishes before it.
 			// Default to !stepInto
 
@@ -815,55 +838,77 @@ mp(PDEBUG_CLIENT4 Client, PCSTR args)
 
 				if (c)
 				{
-					// Set a breakpoint at callAddr-3 and release the debugger
-					char cmd[256];
-					sprintf(cmd, "bp 0x%llX ; g ; t", callAddr - 3); // TODO delete the breakpoint when it's hit
-					g_ExtControl->Execute(DEBUG_OUTCTL_IGNORE,
-						cmd,
-						DEBUG_EXECUTE_DEFAULT);
+					bp->SetOffset(callAddr - 3);
+					//bp->SetCommand("t"); // execute jmp rax
 				}
 			}
 			else
 			{
-				// the function was already jitted, we're good
+				// the function was already jitted
+				bp->SetOffset(callAddr);
 			}
+			g_ExtControl->Execute(DEBUG_OUTCTL_IGNORE,
+				"g",
+				DEBUG_EXECUTE_DEFAULT);
+
+			// Wait until bp is hit
+			ULONG ulStatus = 0;
+			bp->GetOffset(&callAddr);
+			bool stoppedAtBP = false;
+			ULONG64 rip = 0;
+			while (!stoppedAtBP && ulStatus != DEBUG_STATUS_NO_DEBUGGEE)
+			{
+				g_ExtControl->WaitForEvent(DEBUG_WAIT_DEFAULT, INFINITE);
+				g_ExtControl->GetExecutionStatus(&ulStatus);
+				registers->GetInstructionOffset(&rip);
+				stoppedAtBP = (rip == callAddr && ulStatus == DEBUG_STATUS_BREAK);
+			}
+
+			reset_clr_interfaces(); // When a method is jitted, the CLR interfaces become corrupt
+
+			// Step until a managed source code line is found
+			g_ExtControl->SetCodeLevel(DEBUG_LEVEL_ASSEMBLY);
+			line = 0;
+			while (line == 0 && stepCount < 60) // against infinite loops
+			{
+				StepComplete("t", rip, registers);
+				registers->GetInstructionOffset(&rip);
+
+				ULONG64 ilAddr = 0;
+				if (ip2il(rip, /*out*/&ilAddr, /*out*/(WCHAR*)function, symbols3) == S_OK && ilAddr)
+				{
+					g_ExtSymbols->GetLineByOffset(ilAddr, &line, file, file ? 1024 : 0, 0, 0);
+				}
+				stepCount++;
+			}
+			g_ExtControl->SetCodeLevel(DEBUG_LEVEL_SOURCE);
+			dprintf("%s(%d)+0\n(0) %s\n", file, line, function);
 		}
 		else
 		{
-			// The source code is not always executed vertically : end of loops, return of functions, ...
+			// Managed step over, don't step into function calls.
+
+			// The source code line does not always increase by execution : end of loops, return of functions, ...
 			// We must step in assembler and query the source code until the line changes.
 			line = initLine;
-			ULONG stepCount = 0;
-			ip2ilContext context(frame.InstructionOffset, iClr, symbols3);
+			stepCount = 0;
+			ip2ilContext context(rip, symbols3); // Managed method at rip
+			g_ExtControl->SetCodeLevel(DEBUG_LEVEL_ASSEMBLY);
 			while ((line == initLine
 				|| (!line && !*function)
 				|| (!line && strcmp(function, initFunction) == 0))
 				&& stepCount < 60) // against infinite loops
 			{
-				g_ExtControl->Execute(DEBUG_OUTCTL_IGNORE |
-					DEBUG_OUTCTL_NOT_LOGGED,
-					stepInto ? "t" : "p",
-					DEBUG_EXECUTE_DEFAULT);
-
-				// wait for the step to finish
-				ULONG ulStatus = 0;
-				do
-				{
-					g_ExtControl->WaitForEvent(DEBUG_WAIT_DEFAULT, INFINITE);
-					g_ExtControl->GetExecutionStatus(&ulStatus);
-					//dprintf("Wait currStat 0x%x, step count %d\n0:000>\n", ulStatus, stepCount);
-				} while (ulStatus != DEBUG_STATUS_BREAK && ulStatus != DEBUG_STATUS_NO_DEBUGGEE);
-
-				g_ExtControl->GetStackTrace(0, 0, 0, &frame, 1, 0);
+				StepComplete("p", rip, registers);
+				registers->GetInstructionOffset(&rip);
 				ULONG32 ilOffset = 0;
-				context.meth->GetILOffsetsByAddress(frame.InstructionOffset, 1, 0, &ilOffset); // != S_OK) // careful to offsets 0xfffffffd and the like
+				context.meth->GetILOffsetsByAddress(rip, 1, 0, &ilOffset);
 				g_ExtSymbols->GetLineByOffset(context.methAddress + ilOffset, &line, 0, 0, 0, 0);
 				stepCount++;
 			}
+			g_ExtControl->SetCodeLevel(DEBUG_LEVEL_SOURCE);
 
-			char file[1024];
-			WhereIs(frame.InstructionOffset, file, &line, function, &managed, iClr, symbols3);
-
+			WhereIs(rip, file, &line, function, &managed, iClr, symbols3);
 			dprintf("%s(%d)+0\n(0) %s\n", file, line, function);
 		}
 	}
@@ -882,5 +927,6 @@ mp(PDEBUG_CLIENT4 Client, PCSTR args)
 	}
 
 	symbols3->Release();
+	registers->Release();
 	return S_OK;
 }
