@@ -785,11 +785,16 @@ mp(PDEBUG_CLIENT4 Client, PCSTR args)
 
 	ULONG64 rip = 0;
 	registers->GetInstructionOffset(&rip);
-	char initFunction[1024] = "";
-	char function[1024] = "";
+	WCHAR initFunction[1024] = L"";
+	WCHAR function[1024] = L"";
 	bool managed = false;
 	ULONG initLine = 0, line = 0;
-	WhereIs(rip, 0, &initLine, /*out*/initFunction, &managed, iClr, symbols3);
+	ULONG64 ilAddr = 0;
+	if (ip2il(rip, /*out*/&ilAddr, /*out*/initFunction, symbols3) == S_OK && ilAddr)
+	{
+		managed = true;
+		g_ExtSymbols->GetLineByOffset(ilAddr, &line, file, file ? 1024 : 0, 0, 0);
+	}
 
 	if (managed)
 	{
@@ -875,14 +880,14 @@ mp(PDEBUG_CLIENT4 Client, PCSTR args)
 				registers->GetInstructionOffset(&rip);
 
 				ULONG64 ilAddr = 0;
-				if (ip2il(rip, /*out*/&ilAddr, /*out*/(WCHAR*)function, symbols3) == S_OK && ilAddr)
+				if (ip2il(rip, /*out*/&ilAddr, /*out*/function, symbols3) == S_OK && ilAddr)
 				{
 					g_ExtSymbols->GetLineByOffset(ilAddr, &line, file, file ? 1024 : 0, 0, 0);
 				}
 				stepCount++;
 			}
 			g_ExtControl->SetCodeLevel(DEBUG_LEVEL_SOURCE);
-			dprintf("%s(%d)+0\n(0) %s\n", file, line, function);
+			dprintf("%s(%d)+0\n(0) %S\n", file, line, function);
 		}
 		else
 		{
@@ -896,7 +901,7 @@ mp(PDEBUG_CLIENT4 Client, PCSTR args)
 			g_ExtControl->SetCodeLevel(DEBUG_LEVEL_ASSEMBLY);
 			while ((line == initLine
 				|| (!line && !*function)
-				|| (!line && strcmp(function, initFunction) == 0))
+				|| (!line && wcscmp(function, initFunction) == 0))
 				&& stepCount < 60) // against infinite loops
 			{
 				StepComplete("p", rip, registers);
@@ -908,8 +913,12 @@ mp(PDEBUG_CLIENT4 Client, PCSTR args)
 			}
 			g_ExtControl->SetCodeLevel(DEBUG_LEVEL_SOURCE);
 
-			WhereIs(rip, file, &line, function, &managed, iClr, symbols3);
-			dprintf("%s(%d)+0\n(0) %s\n", file, line, function);
+			ULONG64 ilAddr = 0;
+			if (ip2il(rip, /*out*/&ilAddr, /*out*/function, symbols3) == S_OK && ilAddr)
+			{
+				g_ExtSymbols->GetLineByOffset(ilAddr, &line, file, file ? 1024 : 0, 0, 0);
+			}
+			dprintf("%s(%d)+0\n(0) %S\n", file, line, function);
 		}
 	}
 	else
