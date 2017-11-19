@@ -90,7 +90,7 @@ public:
 		child = 0;
 		requestedId = 0;
 	}
-	ManagedBreakpoint(char* module, char* file, char* function, ULONG line)
+	ManagedBreakpoint(const char* module, const char* file, const char* function, ULONG line)
 	{
 		address = 0;
 		strcpy_s(this->module, 256, module);
@@ -146,21 +146,14 @@ public:
 
 ManagedBreakpoint gPendingBreakpointList; // waiting for their functions to be jitted
 
-
-HRESULT sourceCode2ip(const char* moduleName,
-	const char* fileName,
-	/*in out*/ char* functionName, // optional, including class for managed functions, overwritten with complete name
-	ULONG line,
-	/*out*/ ULONG64* ip,
-	/*out*/ bool* managed)
+/**
+	Find the address in memory at which a module was loaded by the debuggee.
+*/
+ULONG64 FindModuleInMemory(const char* moduleName)
 {
-	IXCLRDataProcess* iClr = GetIClr();
-	*managed = false;
-	*ip = 0;
-
 	// Loaded module names can be different from their DLLs (. replaced by _, offset added)
-	ULONG loadedModules, unloadedModules;
-	g_ExtSymbols->GetNumberModules(&loadedModules, &unloadedModules);
+	ULONG loadedModules = 0, unloadedModules = 0;
+	g_ExtSymbols->GetNumberModules(/*out*/&loadedModules, /*out*/&unloadedModules);
 
 	char ImageNameBuffer[256];
 	char ModuleNameBuffer[256];
@@ -178,20 +171,35 @@ HRESULT sourceCode2ip(const char* moduleName,
 				moduleName, modNameLength) == 0)
 			break;
 	}
-	if (i == loadedModules)
-	{
-		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "sourceCode2ip, DLL %s not loaded.\n", moduleName);
-		return E_FAIL;
-	}
-
 
 	ULONG64 modBase = 0;
-	if (g_ExtSymbols->GetModuleByIndex(i, /*out*/&modBase) != S_OK)
+	return (i == loadedModules || g_ExtSymbols->GetModuleByIndex(i, /*out*/&modBase) != S_OK) ?
+		0 : modBase;
+}
+
+/**
+	For a given position in the source code (module, file and line), find its instruction pointer
+	and tell if it is managed code.
+*/
+HRESULT sourceCode2ip(const char* moduleName,
+	const char* fileName,
+	/*in out*/ char* functionName, // optional, including class for managed functions, overwritten with complete name
+	ULONG line,
+	/*out*/ ULONG64* ip,
+	/*out*/ bool* managed,
+	bool addManagedBreakpoint)
+{
+	IXCLRDataProcess* iClr = GetIClr();
+	*managed = false;
+	*ip = 0;
+
+	const ULONG64 modBase = FindModuleInMemory(moduleName);
+	if (modBase == 0)
 	{
 		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "sourceCode2ip, module %s not found.\n", moduleName);
 		return E_FAIL;
 	}
-	g_ExtSymbols->GetNameByOffset(modBase, 0, 0, 0, 0); // load its PDB if needed
+	g_ExtSymbols->GetNameByOffset(modBase, 0, 0, 0, 0); // load moduleName's PDB if needed
 
 	if (g_ExtSymbols->GetOffsetByLine(line, fileName, /*out*/ip) != S_OK
 		&& g_ExtSymbols->GetOffsetByLine(line + 1, fileName, /*out*/ip) != S_OK
@@ -200,14 +208,18 @@ HRESULT sourceCode2ip(const char* moduleName,
 		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "sourceCode2ip, failed to get IP %s %d\n", fileName, line);
 		return E_FAIL;
 	}
-	//dprintf("native address %p\n", *ip);
+	IXCLRDataModule* clrModule = 0;
+	if (iClr->GetModuleByAddress(*ip, &clrModule) != S_OK)
+	{
+		return E_FAIL; // even not jitted methods would get a module here
+	}
 
-	ULONG64 ilDispl;
-	char nativeFunction[256];
+	ULONG64 ilDispl = 0;
+	char nativeFunction[256] = "";
 	g_ExtSymbols->GetNameByOffset(*ip,
-		nativeFunction, 256,
+		/*out*/nativeFunction, 256,
 		0,
-		&ilDispl);
+		/*out*/&ilDispl);
 
 	if (!strstr(functionName, "."))
 	{
@@ -216,26 +228,6 @@ HRESULT sourceCode2ip(const char* moduleName,
 		char* tok = strtok(nativeFunction, "!");
 		tok = strtok(0, "+");
 		strcat(functionName, tok);
-		//		dprintf("managed func name %s\n", functionName);
-	}
-
-	IXCLRDataModule* clrModule = 0;
-	if (iClr->GetModuleByAddress(*ip, &clrModule) != S_OK)
-	{
-		//CLRDATA_ENUM hdl = 0;
-		//iClr->lpVtbl->StartEnumModules(iClr, &hdl);
-		//while (iClr->lpVtbl->EnumModule(iClr, &hdl, &clrModule) == S_OK)
-		//{
-		//	WCHAR clrName[256];
-		//	clrModule->lpVtbl->GetName(clrModule, 256, 0, clrName);
-		//	wcstombs(ModuleNameBuffer, clrName, 256);
-		//	if (strcmp(ModuleNameBuffer, moduleName) == 0)
-		//		break;
-		//	clrModule->lpVtbl->Release(clrModule);
-		//}
-		//iClr->lpVtbl->EndEnumModules(iClr, hdl);
-
-		return E_FAIL; // maybe not jitted yet ?
 	}
 
 	WCHAR functionW[256];
@@ -245,11 +237,6 @@ HRESULT sourceCode2ip(const char* moduleName,
 	CLRDATA_ENUM hdl = 0, hdl2 = 0;
 	IXCLRDataMethodDefinition* clrMethod = 0; // when jitted it'll have instances
 	IXCLRDataMethodInstance* clrMethodInstance = 0;
-
-	// Changing the module changes the function that is notified ?
-	//ULONG64 mngMod = 0;
-	//clrModule->lpVtbl->Request(clrModule, 0xf0000000, 0, 0, 8, &mngMod); // convert native to managed module ?
-
 	clrModule->StartEnumMethodDefinitionsByName(functionW, 0, &hdl);
 	if (clrModule->EnumMethodDefinitionByName(&hdl, &clrMethod) == S_OK)
 	{
@@ -259,8 +246,12 @@ HRESULT sourceCode2ip(const char* moduleName,
 
 		if (clrMethod->StartEnumInstances(0, &hdl2) != S_OK)
 		{
-			g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "Method %s not found. Maybe not jitted yet.\n", functionName);
-			// clrMethod->lpVtbl->SetCodeNotification(clrMethod, true); // tell the JIT compiler to throw an exception of type clrn when it does this method
+			*ip = 0;
+			if (addManagedBreakpoint)
+			{
+				clrMethod->SetCodeNotification(true);
+				gPendingBreakpointList.Add(new ManagedBreakpoint(moduleName, fileName, functionName, line));
+			}
 			clrMethod->Release();
 			clrModule->EndEnumMethodDefinitionsByName(hdl);
 			clrModule->Release();
@@ -271,14 +262,13 @@ HRESULT sourceCode2ip(const char* moduleName,
 
 		CLRDATA_ADDRESS_RANGE ip2;
 		if (clrMethodInstance->GetAddressRangesByILOffset(
-			(ULONG)ilDispl,
-			1,
-			0, //unsigned int *
-			/*out*/ &ip2) != S_OK)
+								(ULONG)ilDispl,
+								1,
+								0, //unsigned int *
+								/*out*/ &ip2) != S_OK)
 			g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "failed to get IP\n");
 
 		*ip = ip2.startAddress;
-
 		clrMethod->Release();
 	}
 	clrModule->EndEnumMethodDefinitionsByName(hdl);
@@ -324,57 +314,23 @@ mbp(PDEBUG_CLIENT4 Client, PCSTR args)
 	sscanf(tok, "%d", &line);
 
 	reset_clr_interfaces();
-	IXCLRDataProcess* iClr = GetIClr();
 	ISOSDacInterface* iClr3 = GetIClr3();
 	DacpUsefulGlobalsData usefulGlobals;
 	iClr3->GetUsefulGlobals(&usefulGlobals);
 
-	bool managed;
+	bool managed = false;
 	ULONG64 ip = 0;
-	HRESULT res = sourceCode2ip(module, file, function, line, &ip, &managed);
+	HRESULT res = sourceCode2ip(module, file, function, line, &ip, &managed, true);
 
-	if (managed)
+	if (ip != 0)
 	{
-		if (res == S_FALSE)
-		{
-			// TODO move this into sourceCode2ip
-
-			// remember to add a breakpoint when this method is Jitted
-			IXCLRDataModule* clrModule = 0;
-			CLRDATA_ENUM hdl = 0, hdl2 = 0;
-			iClr->GetModuleByAddress(ip, &clrModule);
-			IXCLRDataMethodDefinition* clrMethod = 0;
-			WCHAR functionW[256];
-			mbstowcs(functionW, function, 256);
-			clrModule->StartEnumMethodDefinitionsByName(functionW, 0, &hdl);
-			clrModule->EnumMethodDefinitionByName(&hdl, &clrMethod);
-			if (clrMethod->StartEnumInstances(0, &hdl2) != S_OK)
-				clrMethod->SetCodeNotification(true);
-			clrMethod->Release();
-			clrModule->Release();
-
-			gPendingBreakpointList.Add(new ManagedBreakpoint(module, file, function, line));
-			g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "adding deferred breakpoint %s %d\n", file, line);
-		}
-		else
-		{
-			IDebugBreakpoint* ibp;
-			g_ExtControl->AddBreakpoint(DEBUG_BREAKPOINT_CODE,
-				DEBUG_ANY_ID,
-				&ibp);
-			ibp->SetFlags(DEBUG_BREAKPOINT_ENABLED);
-			ibp->SetOffset(ip);
-		}
+		IDebugBreakpoint* ibp;
+		g_ExtControl->AddBreakpoint(DEBUG_BREAKPOINT_CODE,
+			DEBUG_ANY_ID,
+			&ibp);
+		ibp->SetFlags(DEBUG_BREAKPOINT_ENABLED);
+		ibp->SetOffset(ip);
 	}
-	else
-	{
-		char cmd[256];
-		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, cmd, "bp `%s!%s:%d`", module, file, line);
-		g_ExtControl->Execute(DEBUG_OUTCTL_IGNORE,
-			cmd,
-			DEBUG_EXECUTE_DEFAULT);
-	}
-
 	return S_OK;
 }
 
@@ -962,6 +918,9 @@ class BreakpointSetter : public IXCLRDataExceptionNotification
 
 	virtual HRESULT OnCodeGenerated(/* [in] */ IXCLRDataMethodInstance *genMethod) override
 	{
+		// Now genMethod is jitted. Search it in gPendingBreakpointList and if is there,
+		// set a normal breakpoint at its IP.
+
 		WCHAR methodNameW[256];
 		genMethod->GetName(0, 256, 0, /*out*/methodNameW);
 		char methodName[256];
@@ -976,7 +935,7 @@ class BreakpointSetter : public IXCLRDataExceptionNotification
 				bp->requestedId,
 				&ibp);
 			if (*bp->file)
-				sourceCode2ip(bp->module, bp->file, methodName, bp->line, /*out*/&bp->address, &managed);
+				sourceCode2ip(bp->module, bp->file, methodName, bp->line, /*out*/&bp->address, &managed, false);
 			else
 			{
 				CLRDATA_ADDRESS_RANGE ip2;
@@ -991,15 +950,12 @@ class BreakpointSetter : public IXCLRDataExceptionNotification
 				sprintf_s(cmd, 64, "bc %d", bpId);
 				ibp->SetCommand(cmd);
 			}
-			dprintf("resolving deferred breakpoint %s %s %s %d", bp->module, bp->file, methodName, bp->line);
-			dprintf(" %p\n", bp->address);
-
 			ibp->SetFlags(DEBUG_BREAKPOINT_ENABLED);
 			ibp->SetOffset(bp->address);
 			gPendingBreakpointList.Remove(bp);
 		}
 		else
-			dprintf("pending breakpoint not found\n");
+			dprintf("Jitted method %s has no pending breakpoints.\n", methodName);
 
 		return S_OK;
 	}
