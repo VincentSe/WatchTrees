@@ -19,3 +19,4 @@ EXPORTS
 	mbl
 	mp
 	HandleCLRNotification
+	EvaluateManagedExpression

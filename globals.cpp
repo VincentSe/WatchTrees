@@ -5,6 +5,7 @@ Copyright (c) 2017  Vincent Semeria
 --*/
 
 #include "globals.h"
+#include "CLRInterfaces.h"
 
 #define KDEXT_64BIT 
 // Structures that describe structures (fPointer, fStruct, fArray, ...)
@@ -18,6 +19,8 @@ PDEBUG_CONTROL        g_ExtControl = 0;
 PDEBUG_SYMBOLS2       g_ExtSymbols = 0;
 IDebugAdvanced2*	  g_ExtAdvanced = 0;
 IDebugSystemObjects*  g_ExtSystem = 0;
+
+ISymUnmanagedBinder2* g_SymBinder = 0;
 
 void DestroyDebuggerGlobals()
 {
@@ -103,7 +106,10 @@ DebugExtensionInitialize(PULONG Version, PULONG Flags)
 		DebugControl->Release();
 	}
 
-	//CoInitializeEx(0, 0);
+	CoInitializeEx(0, 0);
+	CoCreateInstance(__uuidof(CorSymBinder_SxS), 0, 1,
+		__uuidof(ISymUnmanagedBinder2), (void **)&g_SymBinder); // link to ole32.dll
+
 	DebugClient->Release();
 	return Hr;
 }

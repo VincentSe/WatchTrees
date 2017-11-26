@@ -17,9 +17,12 @@ Copyright (c) 2017  Vincent Semeria
 #include "globals.h"
 #include "CLRInterfaces.h"
 #include <stdio.h>
+#include <functional>
 
 #define KDEXT_64BIT 
 #include "wdbgexts.h"
+
+extern ISymUnmanagedBinder2* g_SymBinder; // in globals.cpp
 
 IXCLRDataProcess*& GetIClr()
 {
@@ -1037,5 +1040,208 @@ HandleCLRNotification(PDEBUG_CLIENT4 Client, PCSTR args)
 		DEBUG_EXECUTE_DEFAULT);
 	g_ExtControl->OutputPrompt(DEBUG_OUTCTL_THIS_CLIENT, 0);
 
+	return S_OK;
+}
+
+/**
+	Recursively enumerate local variables in scope and its children scopes.
+*/
+bool RecursiveEnumLocalVarNames(ISymUnmanagedScope* scope,
+	std::function<bool(unsigned int varIndex, const WCHAR* varName)> processor)
+{
+	ISymUnmanagedScope* children[128];
+	ULONG32 childrenRead, varCountRead;
+	scope->GetLocalCount(&varCountRead);
+
+	ISymUnmanagedVariable* locVars[256];
+	scope->GetLocals(256, &varCountRead, locVars);
+
+	WCHAR varNameW[64];
+	bool cont = true;
+	for (ULONG32 i = 0; i<varCountRead; i++)
+	{
+		if (cont)
+		{
+			locVars[i]->GetName(64, 0, /*out*/varNameW);
+			cont = processor(i, varNameW);
+		}
+		locVars[i]->Release();
+	}
+	if (!cont)
+		return false;
+
+	scope->GetChildren(128, &childrenRead, children);
+	for (ULONG32 i = 0; i<childrenRead; i++)
+	{
+		if (cont)
+			cont = RecursiveEnumLocalVarNames(children[i], processor);
+		children[i]->Release();
+	}
+	return cont;
+}
+
+/**
+	IXCLRDataValue doesn't have the local variables' names. We have to use symbol readers.
+*/
+HRESULT enumLocVarNames(ULONG64 ip,
+	std::function<bool(unsigned int varIndex, const WCHAR* varName)> processor)
+{
+	IXCLRDataProcess* iClr = GetIClr();
+
+	// CLRDATA_ADDRESS_TO_TADDR(&ip); seems useless and corrupt in 64 bits
+	CLRDATA_ENUM hdl = 0;
+	IXCLRDataAppDomain* domain = 0;
+	IXCLRDataMethodInstance* meth = 0;
+	HRESULT startEnum = iClr->StartEnumMethodInstancesByAddress(ip, domain, &hdl);
+	if (startEnum != S_OK
+		|| iClr->EnumMethodInstanceByAddress(&hdl, &meth) != S_OK
+		|| iClr->EndEnumMethodInstancesByAddress(hdl) != S_OK)
+	{
+		//dprintf("start enum method failed, maybe not in JIT area\n");
+		return E_FAIL;
+	}
+
+	ULONG32 mdToken = 0;
+	IXCLRDataModule* module = 0;
+	meth->GetTokenAndScope(/*out*/&mdToken, &module);
+	meth->Release();
+
+	WCHAR fileName[128];
+	module->GetFileName(128, 0, fileName);
+
+	IMetaDataImport* mdImp = 0;
+	if (module->QueryInterface(IID_IMetaDataImport, (void **)&mdImp) != S_OK)
+		dprintf("failed metadata import\n");
+	IMetaDataImport2* mdImp2 = 0;
+	if (mdImp->QueryInterface(IID_IMetaDataImport2, (void **)&mdImp2) != S_OK)
+		dprintf("failed metadata import 2\n");
+	mdImp->Release();
+	module->Release();
+
+	ISymUnmanagedReader* umgRead = 0;
+	if (g_SymBinder->GetReaderForFile(mdImp2, //  /* [in] */ IUnknown *importer,
+		fileName,
+		0, ///* [in] */ const WCHAR *searchPath,
+		   // 0, ///* [in] */ ULONG32 searchPolicy,
+		&umgRead) != S_OK)
+		dprintf("reader query failed\n");
+	mdImp2->Release();
+
+	ISymUnmanagedMethod* methodReader = 0;
+	if (umgRead->GetMethod(mdToken, &methodReader) != S_OK)
+		dprintf("method reader query failed\n");;
+	umgRead->Release();
+
+	ISymUnmanagedScope* methodScope = 0;
+	methodReader->GetRootScope(&methodScope);
+	methodReader->Release();
+
+	RecursiveEnumLocalVarNames(methodScope, processor);
+	methodScope->Release();
+
+	return S_OK;
+}
+
+
+HRESULT get_current_managed_frame(/*out*/IXCLRDataFrame** frame)
+{
+	IXCLRDataProcess* iClr = GetIClr();
+
+	// ULONG64 threadTEB;
+	// sysObj->GetCurrentThreadTeb(&threadTEB);
+	// ULONG outBuf[7];
+	// ReadMemory(threadTEB, outBuf, sizeof(outBuf), 0);
+	// ULONG64 ebp = outBuf[1]; // maybe top of the whole stack
+
+	if (!g_ExtSystem || !iClr)
+	{
+		dprintf("bad args\n");
+		return E_FAIL;
+	}
+
+	ULONG threadId = 0;
+	IXCLRDataTask* task = 0;
+	g_ExtSystem->GetCurrentThreadSystemId(&threadId); //sysObj->GetCurrentThreadId(&threadId);
+	HRESULT res = iClr->GetTaskByOSThreadID(threadId, &task);
+	if (res != S_OK)
+		return res;
+
+	IXCLRDataStackWalk* stackWalk = 0;
+	ULONG32 flag = 0xf; // ?
+	task->CreateStackWalk(flag, &stackWalk);
+	task->Release();
+
+	res = stackWalk->GetFrame(frame);
+	stackWalk->Release();
+
+	return res;
+}
+
+HRESULT CALLBACK
+EvaluateManagedExpression(PDEBUG_CLIENT4 Client, PCSTR args)
+{
+	NativeDbgEngAPIManager dbgApi(Client);
+	if (!dbgApi.initialized) return E_FAIL;
+	reset_clr_interfaces(); // old ones might be corrupt here
+
+	IXCLRDataFrame* clrFrame;
+	if (get_current_managed_frame(/*out*/&clrFrame) != S_OK)
+		return E_FAIL;
+
+	DEBUG_STACK_FRAME frame;
+	if (g_ExtControl->GetStackTrace(0, 0, 0, &frame, 1, 0) != S_OK)
+		return E_FAIL;
+
+	ULONG32 numArgs = 0;
+	WCHAR exprW[256];
+	WCHAR locVarName[256];
+	ULONG32 nameLen = 0;
+	mbstowcs(/*out*/exprW, args, 256);
+	HRESULT res;
+
+	IXCLRDataValue* locVar = 0;
+
+	// Search in local variables
+	ULONG i = -1;
+	enumLocVarNames(frame.InstructionOffset,
+		[&i, exprW](unsigned int varIndex, const WCHAR* varName) -> bool
+		{
+			if (wcscmp(exprW, varName) == 0)
+			{
+				i = varIndex;
+				return false;
+			}
+			else
+				return true;
+		});
+	if (i != -1)
+	{
+		res = clrFrame->GetLocalVariableByIndex(i, &locVar, 0, nullptr, nullptr);
+	}
+
+	if (!locVar)
+	{
+		// Search in local arguments
+		clrFrame->GetNumArguments(&numArgs);
+		for (ULONG i = 0; i<numArgs; i++)
+		{
+			res = clrFrame->GetArgumentByIndex(i, &locVar, 256, 0, /*out*/locVarName);
+			if (0 == wcscmp(locVarName, exprW))
+				break;
+			else
+			{
+				locVar->Release();
+				locVar = 0;
+			}
+		}
+	}
+
+	//w->GetManagedType(locVar);
+	if (locVar)
+	{
+		dprintf("Variable found\n");
+		locVar->Release();
+	}
+	clrFrame->Release();
 	return S_OK;
 }
