@@ -364,7 +364,7 @@ set_watch_value(PDEBUG_CLIENT4 Client, PCSTR args)
 	// 	g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "Watch set value failed\n");
 
 	char cmd[256];
-	sprintf_s(/*out*/cmd, 256, "?? *(%s*)0x%p =", typeName, Address);
+	sprintf_s(/*out*/cmd, 256, "?? *(%s*)0x%p =", typeName, (void*)Address);
 	strcat_s(cmd, 256, pch);
 	g_ExtControl->Execute(DEBUG_OUTCTL_IGNORE, // print the resulting watch instead
 		cmd,
@@ -377,70 +377,3 @@ struct SymEnumContext
 {
 	ULONG64 hProcess = 0;
 };
-
-BOOL symbolCallback(
-	_In_ PSYMBOL_INFO pSymInfo,
-	_In_ ULONG SymbolSize,
-	_In_opt_ PVOID UserContext
-	)
-{
-	SymEnumContext* context = (SymEnumContext*)UserContext;
-
-	WCHAR* symName;
-	DWORD symTag = 0;
-	char name[1024];
-	SymGetTypeInfo((HANDLE)context->hProcess, pSymInfo->ModBase, pSymInfo->TypeIndex, TI_GET_SYMTAG, /*out*/&symTag);
-	g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "%s %d\n", pSymInfo->Name, symTag);
-	//if (SymGetTypeInfo((HANDLE)context->hProcess, pSymInfo->ModBase, pSymInfo->TypeIndex, TI_GET_SYMNAME, /*out*/&symName))
-	//{
-	//	std::wcstombs(/*out*/name, symName, 1024);
-	//	g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "%s %d\n", name, symTag);
-	//	LocalFree(symName); symName = 0;
-	//}
-	//else
-	//	g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "UNNAMMED SYMBOL %d\n", symTag);
-	return true;
-}
-
-HRESULT CALLBACK
-test_sym(PDEBUG_CLIENT4 Client, PCSTR args)
-{
-	// PDB Symbols are :
-	//		SymTagData (7) : local variables, fields of classes and structs. The TI_GET_SYMNAME and types of those symbols can be queried.
-	//		SymTagFunction (5) : functions
-	//		SymTagUDT (11) : User-Defined Type, including generated template types. The TI_GET_SYMNAME and children of those symbols can be queried.
-	//		SymTagFunctionType (13), SymTagPointerType (14), SymTagBaseType (16) : no TI_GET_SYMNAME.
-
-	// Symbols are loaded lazily, depending on the order of the commands sent to CDB,
-	// they increment the 3rd argument of SymGetTypeInfo.
-
-	NativeDbgEngAPIManager dbgApi(Client);
-	if (!dbgApi.initialized) return E_FAIL;
-
-	SymEnumContext context;
-	g_ExtSystem->GetCurrentProcessHandle(/*out*/&context.hProcess);
-	DWORD type = 0;
-	ULONG64 Module = gWatches[0].valTree.module;
-	char* mask = "";
-	
-	BOOL b = SymEnumSymbols((HANDLE)context.hProcess, Module, mask, &symbolCallback, &context);
-
-
-	//WCHAR* symName;
-	//char name[1024];
-	//for (ULONG SymbolId = 0; SymbolId<100; SymbolId++)
-	//{
-	//	DWORD symTag = 0;
-	//	SymGetTypeInfo((HANDLE)hProcess, Module, SymbolId, TI_GET_SYMTAG, /*out*/&symTag);
-	//	if (SymGetTypeInfo((HANDLE)hProcess, Module, SymbolId, TI_GET_SYMNAME, /*out*/&symName))
-	//	{
-	//		std::wcstombs(/*out*/name, symName, 1024);
-	//		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "%s %d\n", name, symTag);
-	//		LocalFree(symName); symName = 0;
-	//	}
-	//	else
-	//		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "UNNAMMED SYMBOL %d\n", symTag);
-	//}
-
-	return S_OK;
-}

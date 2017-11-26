@@ -736,7 +736,7 @@ TypedValueTree* TypedValueTree::FindWatchPath(const unsigned int* watchPos, int 
 	if (depth == 0)
 		return this;
 
-	const int firstIndex = watchPos[0];
+	const unsigned int firstIndex = watchPos[0];
 	auto w = std::find_if(children.begin(), children.end(),
 		[firstIndex](const TypedValueTree& c) { return c.offset >= firstIndex; }); // optimization because children offsets are sorted, we really search for ==
 	return (w == children.end() || w->offset != firstIndex)
@@ -781,13 +781,15 @@ struct EvaluateRequest
 	{
 		ZeroMemory(this, sizeof(EvaluateRequest));
 		baseData.Operation = EXT_TDOP_SET_FROM_EXPR; // EXT_TDOP_EVALUATE;
-		baseData.InStrIndex = (ULONG64)expr - (ULONG64)this; // offset so that the request finds expr
+		const ULONG64 offset = (char*)expr - (char*)this;
+		baseData.InStrIndex = (ULONG)offset; // offset so that the request finds expr
 	}
 	void Reset()
 	{
 		ZeroMemory(this, sizeof(EvaluateRequest));
 		baseData.Operation = EXT_TDOP_SET_FROM_EXPR; // EXT_TDOP_EVALUATE;
-		baseData.InStrIndex = (ULONG64)expr - (ULONG64)this; // offset so that the request finds expr		
+		const ULONG64 offset = (char*)expr - (char*)this;
+		baseData.InStrIndex = (ULONG)offset; // offset so that the request finds expr		
 	}
 
 	EXT_TYPED_DATA baseData;
