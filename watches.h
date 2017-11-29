@@ -63,6 +63,12 @@ public:
 	void FromField(const Field& field, ULONG64 addr);
 	ULONG64 GetAddressOfData() const; // dereference this->address for pointer types
 
+	/**
+		For direct children, this method has the same effect as cleaning then re-expanding this TypedValueTree.
+		But we want to keep the deeper nodes.
+	*/
+	void UpdateChildrenAddresses();
+
 	char GetExpandCharacter() const; // the + or - to click
 
 	// Whether this watch should print its C++ fields, or some other representation (like vectors or maps)

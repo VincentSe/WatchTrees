@@ -138,7 +138,8 @@ bool TypedValueTree::TransformedType() const
 		|| this->type.compare(0, 19, "std::_Tree_iterator") == 0
 		|| this->type.compare(0, 21, "std::_Vector_iterator") == 0
 		|| this->type.compare(0, 27, "std::_Vector_const_iterator") == 0
-		|| this->fieldName.compare(0, 7, "_Myhead") == 0;
+		|| this->fieldName.compare(0, 7, "_Myhead") == 0
+		|| this->fieldName.compare(0, 8, "_Myfirst") == 0;
 }
 
 //struct FieldContext
@@ -245,7 +246,7 @@ void sym_get_type_info(ULONG64 Module,
 				if (addressFound) // Recursively fill the super class's fields
 				{
 					SymGetTypeInfo((HANDLE)hProcess, Module, ids[i], TI_GET_TYPE, /*out*/&TypeId);
-					sym_get_type_info(Module, TypeId, /*out*/ fields, addr);
+					sym_get_type_info(Module, TypeId, /*out*/ fields, addr + offset);
 					continue;
 				}
 				else // Display the virtual super class as a struct field, so that TypedValueTree::Print resolves the vbtable
@@ -261,7 +262,7 @@ void sym_get_type_info(ULONG64 Module,
 			}
 
 			field.TypeId = ids[i];
-			field.address = addr;
+			field.address = addr + offset;
 			field.module = Module;
 			field.virtualSuperClassIndex = virtualSuperClassIndex;
 
@@ -623,6 +624,30 @@ char TypedValueTree::GetExpandCharacter() const
 		return ' ';
 }
 
+void TypedValueTree::UpdateChildrenAddresses()
+{
+	if (TransformedType()) // TODO vectors and _Myfirst of vectors
+		return;
+
+	const ULONG64 addr = GetAddressOfData();
+	for (TypedValueTree& child : children)
+	{
+		// addr may have been modified because this watch is a pointer, or higher up in the call stack
+		if (fields[child.offset].virtualSuperClassIndex == -1)
+			child.address = addr + fields[child.offset].address;
+		else
+		{
+			ULONG64 vbtableAddr = 0; // write 64 bits
+			ULONG cb;
+			const int ptrSize = sizeof(long*);
+			ReadMemory(this->address, /*out*/&vbtableAddr, ptrSize, &cb);
+			child.address = 0;
+			ReadMemory(vbtableAddr + 4 * fields[child.offset].virtualSuperClassIndex, /*out*/&child.address, 4, &cb);
+			child.address += addr;
+		}
+	}
+}
+
 void TypedValueTree::Print(long indent, std::vector<WatchLine>& output)
 {
 	if (!fieldName.empty()) // Top-level watches already printed their expressions
@@ -675,9 +700,11 @@ void TypedValueTree::Print(long indent, std::vector<WatchLine>& output)
 	else
 	{
 		// Print children and fields, children having a higher priority than fields
+		UpdateChildrenAddresses();
 		auto notYetPrintedChild = this->children.begin();
 		if ((this->starCount == this->dereferences || this->starCount == this->dereferences + 1)
 			&& !TransformedType() && addr)
+		{
 			for (ULONG i = 0; i < fieldCount; i++)
 			{
 				// Either print the i-th field or its subwatch
@@ -689,25 +716,13 @@ void TypedValueTree::Print(long indent, std::vector<WatchLine>& output)
 				}
 				if (child != this->children.end())
 				{
-					// addr may have been modified because this watch is a pointer, or higher up in the call stack
-					if (fields[i].virtualSuperClassIndex == -1)
-						child->address = addr + fields[i].address;
-					else
-					{
-						ULONG64 vbtableAddr = 0; // write 64 bits
-						ULONG cb;
-						const int ptrSize = sizeof(long*);
-						ReadMemory(this->address, /*out*/&vbtableAddr, ptrSize, &cb);
-						child->address = 0;
-						ReadMemory(vbtableAddr + 4*fields[i].virtualSuperClassIndex, /*out*/&child->address, 4, &cb);
-						child->address += addr;
-					}
 					child->Print(indent + 2, output);
-					notYetPrintedChild = child+1;
+					notYetPrintedChild = child + 1;
 				}
 				else
 					output.push_back(print_field(fields[i], this->module, addr, indent + 2));
 			}
+		}
 
 		// Finish printing children
 		while (notYetPrintedChild != this->children.end())
