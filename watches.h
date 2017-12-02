@@ -64,8 +64,10 @@ public:
 	ULONG64 GetAddressOfData() const; // dereference this->address for pointer types
 
 	/**
-		For direct children, this method has the same effect as cleaning then re-expanding this TypedValueTree.
-		But we want to keep the deeper nodes.
+		When stepping or hitting a breakpoint, some pointer values can change, invalidating TypedValueTree->address.
+		This methods recomputes the addresses of this TypedValueTree's direct children (not recursively the children of children).
+		It is smarter than erasing all children and expanding them again, because it keeps the deeper tree structure,
+		in particular what children of children were expanded.
 	*/
 	void UpdateChildrenAddresses();
 

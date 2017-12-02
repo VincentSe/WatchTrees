@@ -541,6 +541,7 @@ void TypedValueTree::CopyTypeInfo(const TypedValueTree& other)
 	this->fArray = other.fArray;
 	this->starCount = other.starCount;
 	this->dereferences = other.dereferences;
+	this->address = other.address;
 }
 
 ULONG64 expand_string(const TypedValueTree& w)
@@ -626,8 +627,27 @@ char TypedValueTree::GetExpandCharacter() const
 
 void TypedValueTree::UpdateChildrenAddresses()
 {
-	if (TransformedType()) // TODO vectors and _Myfirst of vectors
+	if (TransformedType())
+	{
+		// For example, std::vectors reallocate on some push_backs. Expand them again.
+		TypedValueTree t;
+		t.CopyTypeInfo(*this);
+		t.FillFieldsAndChildren();
+		if (t.children.size() == children.size())
+		{
+			int tChild = 0;
+			for (TypedValueTree& child : children)
+			{
+				child.address = t.children[tChild].address;
+				tChild++;
+			}
+		}
+		else
+		{
+			children = std::move(t.children); // TODO smarter merge of children
+		}
 		return;
+	}
 
 	const ULONG64 addr = GetAddressOfData();
 	for (TypedValueTree& child : children)
