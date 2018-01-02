@@ -1204,7 +1204,7 @@ EvaluateManagedExpression(PDEBUG_CLIENT4 Client, PCSTR args)
 	// Search in local variables
 	ULONG i = -1;
 	enumLocVarNames(frame.InstructionOffset,
-		[&i, exprW](unsigned int varIndex, const WCHAR* varName) -> bool
+		[&i, &exprW](unsigned int varIndex, const WCHAR* varName) -> bool
 		{
 			if (wcscmp(exprW, varName) == 0)
 			{

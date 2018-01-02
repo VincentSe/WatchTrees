@@ -1054,7 +1054,8 @@ HRESULT expand_array(/*out*/TypedValueTree* w)
 	return S_OK;
 }
 
-HRESULT expand_iterator(/*out*/TypedValueTree* w, bool myVal)
+HRESULT expand_iterator(/*out*/TypedValueTree* w,
+						bool myVal) // for sets and maps, false for vectors
 {
 	TypedValueTree ptr;
 	ptr.FromField(w->FindField("_Ptr"), w->GetAddressOfData());
@@ -1066,7 +1067,7 @@ HRESULT expand_iterator(/*out*/TypedValueTree* w, bool myVal)
 
 	ptr.FillFields();
 	const Field& myValField = ptr.FindField("_Myval"); 
-	if (!myValField.TypeId)
+	if (myVal && !myValField.TypeId)
 	{
 		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "_Myval not found\n");
 		return E_FAIL;
@@ -1078,7 +1079,10 @@ HRESULT expand_iterator(/*out*/TypedValueTree* w, bool myVal)
 		insert_subwatch(std::move(*new TypedValueTree()), *w);
 		sub = w->children.begin();
 	}
-	sub->FromField(myValField, ptr.GetAddressOfData());
+	if (myVal)
+		sub->FromField(myValField, ptr.GetAddressOfData());
+	else
+		sub->CopyTypeInfo(ptr);
 
 	char iterType[2048];
 	g_ExtSymbols->GetTypeName(sub->module, sub->typeId, /*out*/iterType, 2048, 0);
