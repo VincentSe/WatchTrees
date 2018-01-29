@@ -1321,8 +1321,8 @@ HRESULT expand_map(/*out*/TypedValueTree& w, bool myHead)
 				sub = &*child;
 				child++;
 				sub->fieldName = "[" + std::to_string(nbIter) + "]";
-				sub->address = mapNode + myVal.address;
 				sub->CopyTypeInfo(pairTemplate);
+				sub->address = mapNode + myVal.address;
 				nbIter++;
 				nbIterGuard++;
 
@@ -1339,8 +1339,8 @@ HRESULT expand_map(/*out*/TypedValueTree& w, bool myHead)
 					sub = &*child;
 					child++;
 					sub->fieldName = "[" + std::to_string(nbIter) + "]";
-					sub->address = rightNode + myVal.address;
 					sub->CopyTypeInfo(pairTemplate);
+					sub->address = rightNode + myVal.address;
 					nbIter++;
 					nbIterGuard++;
 				}
@@ -1374,8 +1374,8 @@ HRESULT expand_map(/*out*/TypedValueTree& w, bool myHead)
 				sub = &*child;
 				child++;
 				sub->fieldName = "[" + std::to_string(nbIter) + "]";
-				sub->address = mapNode + myVal.address;
 				sub->CopyTypeInfo(pairTemplate);
+				sub->address = mapNode + myVal.address;
 				nbIter++;
 				nbIterGuard++;
 
