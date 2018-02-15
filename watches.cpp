@@ -388,7 +388,9 @@ std::string print_basic_value(	ULONG64 addr,
 		case eShort: typeSize = 2; break;
 		case eInt:
 		case eUInt:
-		case eLong: typeSize = 4; break;
+		case eLong:
+		case eULong:
+			typeSize = 4; break;
 		case eDouble: typeSize = 8; break;
 		}
 	}
