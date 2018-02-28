@@ -106,26 +106,6 @@ void TypedValueTree::Prune()
 	Prune(children.begin());
 }
 
-//struct GetFieldRequest
-//{
-//	GetFieldRequest()
-//	{
-//		ZeroMemory(this, sizeof(GetFieldRequest));
-//		baseData.Operation = EXT_TDOP_GET_FIELD;
-//		baseData.InStrIndex = (ULONG64)fieldName - (ULONG64)this; // offset so that the request finds expr
-//	}
-//
-//	void Reset()
-//	{
-//		ZeroMemory(this, sizeof(GetFieldRequest));
-//		baseData.Operation = EXT_TDOP_GET_FIELD;
-//		baseData.InStrIndex = (ULONG64)fieldName - (ULONG64)this;
-//	}
-//	
-//	EXT_TYPED_DATA baseData;
-//	char fieldName[256];
-//};
-
 bool TypedValueTree::TransformedType() const
 {
 	return this->fArray
@@ -142,48 +122,24 @@ bool TypedValueTree::TransformedType() const
 		|| this->fieldName.compare(0, 8, "_Myfirst") == 0;
 }
 
-//struct FieldContext
-//{
-//	std::vector<Field>* fields;
-//	ULONG inTypeId;
-//	ULONG64 module;
-//	ULONG outFieldCount;
-//};
-//
-//ULONG WDBGAPI fieldCallBack(FIELD_INFO* pField, PVOID UserContext)
-//{
-//	// pField->TypeId is a SymTagData, the symbol carrying the name of the field.
-//	// The symbol of the type of pField is not directly here in pField. We can have it by 
-//	// SymGetTypeInfo(pField->TypeId, TI_GET_TYPE).
-//
-//	// This method is not called back for fields coming from virtual derivations.
-//
-//	FieldContext* context = (FieldContext*)UserContext;
-//
-//	if (context->inTypeId == pField->TypeId)
-//	{
-//		return 0; // can happen when get_type_info is called with a field typeId,
-//				  // just skip this repeated field
-//	}
-//
-//	context->fields->resize(context->fields->size() + 1);
-//	Field& outField = context->fields->back();
-//	strcpy_s(outField.fName, 128, (char*)pField->fName);
-//	outField.size = pField->size;
-//	outField.TypeId = pField->TypeId;
-//	outField.address = pField->address;
-//	//outField.FieldOffset = pField->FieldOffset; // 0, 1, 2, ... looks not filled
-//	outField.fPointer = (bool)pField->fPointer;
-//	outField.fArray = (bool)pField->fArray;
-//	outField.fStruct = (bool)pField->fStruct;
-//	//outField.fConstant = pField->fConstant;
-//	outField.fStatic = pField->fStatic;
-//	context->fields->back().module = context->module;
-//	context->outFieldCount++;
-//	return 0;
-//}
+void symtagToBools(DWORD symtag, bool& fStruct, bool& fPointer, bool& fArray)
+{
+	switch (symtag)
+	{
+	case 11:
+	case 18: // display fields of the base class instead ?
+		fStruct = true;
+		break;
+	case 14:
+		fPointer = true;
+		break;
+	case 15:
+		fArray = true;
+		break;
+	}
+}
 
-void sym_get_type_info(ULONG64 Module,
+DWORD sym_get_type_info(ULONG64 Module,
 						ULONG TypeId,
 						/*out*/ std::vector<Field>& fields,
 						ULONG offset)
@@ -212,7 +168,7 @@ void sym_get_type_info(ULONG64 Module,
 	if (!b)
 	{
 		g_ExtControl->Output(DEBUG_OUTPUT_NORMAL, "Failed to get children of type %d\n", TypeId);
-		return;
+		return symtag;
 	}
 
 	std::vector<ULONG> ids(childrenCount + 2);
@@ -230,6 +186,7 @@ void sym_get_type_info(ULONG64 Module,
 		if (symtag == 18 // base class
 			|| symtag == 7) // data
 		{
+			DWORD fieldSymtag = symtag;
 			const bool addressFound = SymGetTypeInfo((HANDLE)hProcess, Module, ids[i], TI_GET_OFFSET, /*out*/&addr);
 			ULONG virtualSuperClassIndex = -1;
 			if (symtag == 7)
@@ -239,7 +196,7 @@ void sym_get_type_info(ULONG64 Module,
 					continue; // skip static fields
 				ULONG fieldType = 0;
 				SymGetTypeInfo((HANDLE)hProcess, Module, ids[i], TI_GET_TYPE, /*out*/&fieldType);
-				SymGetTypeInfo((HANDLE)hProcess, Module, fieldType, TI_GET_SYMTAG, /*out*/&symtag);
+				SymGetTypeInfo((HANDLE)hProcess, Module, fieldType, TI_GET_SYMTAG, /*out*/&fieldSymtag);
 			}
 			else if (symtag == 18)
 			{
@@ -258,29 +215,18 @@ void sym_get_type_info(ULONG64 Module,
 			if (SymGetTypeInfo((HANDLE)hProcess, Module, ids[i], TI_GET_SYMNAME, /*out*/&symName))
 			{
 				std::wcstombs(/*out*/field.fName, symName, 128);
-				LocalFree(symName); symName = 0;
+				LocalFree(symName);
+				symName = 0;
 			}
 
 			field.TypeId = ids[i];
 			field.address = addr + offset;
 			field.module = Module;
 			field.virtualSuperClassIndex = virtualSuperClassIndex;
-
-			switch (symtag)
-			{
-			case 11:
-			case 18: // display fields of the base class instead ?
-				field.fStruct = true;
-				break;
-			case 14:
-				field.fPointer = true;
-				break;
-			case 15:
-				field.fArray = true;
-				break;
-			}
+			symtagToBools(fieldSymtag, /*out*/field.fStruct, /*out*/field.fPointer, /*out*/field.fArray);
 		}
 	}
+	return symtag;
 }
 
 HRESULT TypedValueTree::GetField(unsigned long fieldOffset,	/*out*/Field& fieldDesc) const
@@ -488,7 +434,8 @@ void TypedValueTree::FillFields()
 	if (fArray || !this->module)
 		return;
 
-	sym_get_type_info(this->module, this->typeId, /*out*/this->fields, 0);
+	DWORD symtag = sym_get_type_info(this->module, this->typeId, /*out*/this->fields, 0);
+	symtagToBools(symtag, /*out*/fStruct, /*out*/fPointer, /*out*/fArray);
 	this->fieldCount = this->fields.size();
 	return;
 
@@ -654,6 +601,9 @@ void TypedValueTree::UpdateChildrenAddresses()
 	const ULONG64 addr = GetAddressOfData();
 	for (TypedValueTree& child : children)
 	{
+		if (child.offset >= fields.size())
+			continue;
+
 		// addr may have been modified because this watch is a pointer, or higher up in the call stack
 		if (fields[child.offset].virtualSuperClassIndex == -1)
 			child.address = addr + fields[child.offset].address;
@@ -713,7 +663,7 @@ void TypedValueTree::Print(long indent, std::vector<WatchLine>& output)
 		return;
 
 	// Recursively print fields, pointed basic values and subwatches
-	if (this->fPointer && addr && fieldCount == 0 && this->children.empty())
+	if (this->fPointer && this->starCount == 1 && addr && fieldCount == 0 && this->children.empty())
 	{
 		// Pointed basic value, print it without name and type
 		output.resize(output.size() + 1);
@@ -1093,7 +1043,7 @@ HRESULT expand_iterator(/*out*/TypedValueTree* w,
 	sub->type = iterType;
 	sub->FillFields();
 	sub->offset = 0;
-	sub->starCount = myVal ? 0 : 1;
+	sub->starCount = countFinalStars(iterType); // equals 2 for std::vector of pointers
 	sub->dereferences = 0;
 
 	return S_OK;
@@ -1298,8 +1248,7 @@ HRESULT expand_map(/*out*/TypedValueTree& w, bool myHead)
 	pairTemplate.module = myVal.module;
 	pairTemplate.type = pairName;
 	pairTemplate.starCount = 0; // it's the pair itself, not a pointer to it
-	pairTemplate.fStruct = true;
-	pairTemplate.FillFields();
+	pairTemplate.FillFields(); // fills fStruct too (can be false for std::set on native types)
 
 	char iterState = 'd'; // down
 	unsigned int nbIter = 0, nbIterGuard = 0;
