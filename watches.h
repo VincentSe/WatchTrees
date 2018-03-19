@@ -110,12 +110,15 @@ struct Watch
 	Watch() = default;
 	Watch(Watch&& other);
 	Watch& operator=(Watch&& other);
-
-	std::string expr;
-	TypedValueTree valTree;
 	
 	HRESULT evaluate();
 	void Print(std::vector<WatchLine>& output);
+
+	std::string fExpr;
+	TypedValueTree fValTree;
+
+	// When an evaluation fails, keep fValTree in case the Watch comes back in scope later
+	HRESULT fLastEval = S_OK;
 };
 
 extern std::vector<Watch> gWatches; 

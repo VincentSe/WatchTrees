@@ -54,8 +54,9 @@ TypedValueTree::TypedValueTree(TypedValueTree&& other)
 
 Watch& Watch::operator=(Watch&& other)
 {
-	expr = std::move(other.expr);
-	valTree = std::move(other.valTree);
+	fExpr = std::move(other.fExpr);
+	fValTree = std::move(other.fValTree);
+	fLastEval = std::move(other.fLastEval);
 	return *this;
 }
 
@@ -525,9 +526,9 @@ void Watch::Print(std::vector<WatchLine>& output)
 	output.resize(output.size() + 1);
 	std::string& name = output.back().name;
 	name = "  ";
-	name[0] = valTree.GetExpandCharacter();
-	name += expr;
-	valTree.Print(0, output);
+	name[0] = fValTree.GetExpandCharacter();
+	name += fExpr;
+	fValTree.Print(0, output);
 }
 
 std::string TypedValueTree::GetDeepType(unsigned __int64 addr) const
@@ -869,39 +870,43 @@ HRESULT Watch::evaluate()
 {
 	SYM_DUMP_PARAM p;
 	ULONG64 dynDeref;
-	if (evaluateExpr(expr.c_str(), &p, &dynDeref) != S_OK)
-		return E_FAIL;
-
-	valTree.address = p.addr;
-	valTree.fArray = p.fArray;
-	valTree.fPointer = (bool)p.fPointer;
-	valTree.fStruct = p.fStruct;
-	valTree.TypeSize = p.TypeSize;
-	if (valTree.typeId != p.TypeId)
+	if (evaluateExpr(fExpr.c_str(), &p, &dynDeref) != S_OK)
 	{
-		// new watch or type change
-		valTree.Prune();
-		valTree.module = p.ModBase;
-		valTree.typeId = p.TypeId;
-		ULONG cb;
-		char type[2048];
-		g_ExtSymbols->GetTypeName(valTree.module, (ULONG)valTree.typeId, /*out*/type, 2048, &cb);
-		valTree.type = type;
-
-		valTree.FillFields();
-
-		if (valTree.fArray && !valTree.fPointer)
-		{
-			valTree.fieldCount = p.nFields;
-			valTree.starCount = 1;
-			valTree.type += "[]";
-		}
-		else
-			valTree.starCount = countFinalStars(valTree.type.c_str());
-		valTree.expanded = !valTree.TransformedType() && valTree.starCount<=1;
+		fLastEval = E_FAIL;
+		return E_FAIL;
 	}
 
-	valTree.dereferences = 0;
+	fValTree.address = p.addr;
+	fValTree.fArray = p.fArray;
+	fValTree.fPointer = (bool)p.fPointer;
+	fValTree.fStruct = p.fStruct;
+	fValTree.TypeSize = p.TypeSize;
+	if (fValTree.typeId != p.TypeId)
+	{
+		// new watch or type change
+		fValTree.Prune();
+		fValTree.module = p.ModBase;
+		fValTree.typeId = p.TypeId;
+		ULONG cb;
+		char type[2048];
+		g_ExtSymbols->GetTypeName(fValTree.module, (ULONG)fValTree.typeId, /*out*/type, 2048, &cb);
+		fValTree.type = type;
+
+		fValTree.FillFields();
+
+		if (fValTree.fArray && !fValTree.fPointer)
+		{
+			fValTree.fieldCount = p.nFields;
+			fValTree.starCount = 1;
+			fValTree.type += "[]";
+		}
+		else
+			fValTree.starCount = countFinalStars(fValTree.type.c_str());
+		fValTree.expanded = !fValTree.TransformedType() && fValTree.starCount<=1;
+	}
+
+	fValTree.dereferences = 0;
+	fLastEval = S_OK;
 	return S_OK;
 }
 

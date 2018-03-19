@@ -16,8 +16,8 @@ HRESULT CALLBACK
 new_watch(PDEBUG_CLIENT4 Client, PCSTR args)
 {
 	Watch* w = new Watch();
-	w->valTree.offset = (unsigned long)gWatches.size();
-	w->expr = args;
+	w->fValTree.offset = (unsigned long)gWatches.size();
+	w->fExpr = args;
 	gWatches.emplace_back(std::move(*w));
 	return S_OK;
 }
@@ -38,10 +38,10 @@ rename_watch(PDEBUG_CLIENT4 Client, PCSTR args)
 	}
 
 	Watch& w = gWatches[offset];
-	w.valTree.Prune();
-	w.valTree.typeId = 0;
-	w.valTree.address = 0;
-	w.expr = watchName;
+	w.fValTree.Prune();
+	w.fValTree.typeId = 0;
+	w.fValTree.address = 0;
+	w.fExpr = watchName;
 
 	return S_OK;
 }
@@ -103,13 +103,13 @@ expand_watch(PDEBUG_CLIENT4 Client, PCSTR args)
 		return E_FAIL;
 	}
 
-	TypedValueTree* w = &gWatches[watchPos[0]].valTree;
+	TypedValueTree* w = &gWatches[watchPos[0]].fValTree;
 	if (depth >= 2)
 		w = w->FindWatchPath(watchPos + 1, depth - 1);
 
 	if (!w)
 	{
-		TypedValueTree* parent = gWatches[watchPos[0]].valTree.FindWatchPath(watchPos + 1, depth - 2);
+		TypedValueTree* parent = gWatches[watchPos[0]].fValTree.FindWatchPath(watchPos + 1, depth - 2);
 		if (parent)
 		{
 			w = parent->NewSubWatch(watchPos[depth - 1]);
@@ -162,7 +162,7 @@ collapse_watch(PDEBUG_CLIENT4 Client, PCSTR args)
 		return E_FAIL;
 	}
 
-	TypedValueTree* w = &gWatches[watchPos[0]].valTree;
+	TypedValueTree* w = &gWatches[watchPos[0]].fValTree;
 	if (depth >= 2)
 		w = w->FindWatchPath(watchPos+1, depth-1);
 	if (!w)
@@ -190,7 +190,7 @@ print_watches(PDEBUG_CLIENT4 Client, PCSTR args)
 	watchLines[0].type = "Type";
 	for (Watch& w : gWatches)
 	{
-		HRESULT eval = S_OK;
+		HRESULT eval = w.fLastEval;
 		if (reeval)
 			eval = w.evaluate();
 		if (eval == S_OK)
@@ -198,7 +198,7 @@ print_watches(PDEBUG_CLIENT4 Client, PCSTR args)
 		else
 		{
 			watchLines.resize(watchLines.size() + 1);
-			watchLines.back().name = "  " + w.expr;
+			watchLines.back().name = "  " + w.fExpr;
 			watchLines.back().type = "### OUT OF SCOPE ###";
 		}
 	}
@@ -256,7 +256,7 @@ set_watch_value(PDEBUG_CLIENT4 Client, PCSTR args)
 		return E_FAIL;
 	}
 
-	TypedValueTree* w = gWatches[watchPos[0]].valTree.FindWatchPath(watchPos + 1, depth - 1);
+	TypedValueTree* w = gWatches[watchPos[0]].fValTree.FindWatchPath(watchPos + 1, depth - 1);
 	TypedValueTree* parent = 0;
 	ULONG64 TypeId = 0;
 	ULONG64 Module = 0, Address = 0;
@@ -272,7 +272,7 @@ set_watch_value(PDEBUG_CLIENT4 Client, PCSTR args)
 	}
 	else
 	{
-		parent = gWatches[watchPos[0]].valTree.FindWatchPath(watchPos + 1, depth - 2);
+		parent = gWatches[watchPos[0]].fValTree.FindWatchPath(watchPos + 1, depth - 2);
 		if (parent)
 		{
 			// set a field of parent, don't create subwatch
